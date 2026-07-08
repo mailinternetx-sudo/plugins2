@@ -14,7 +14,7 @@
     // ==================== НАСТРОЙКИ ====================
 
     // !!! ВСТАВЬТЕ СЮДА СВОЙ URL CLOUDFLARE WORKER (без слэша на конце) !!!
-    var PROXY_URL = 'https://lampa-parser.mail-internetx.workers.dev/';
+    var PROXY_URL = 'https://lampa-parser.mail-internetx.workers.dev';
 
     var CATEGORIES = [
       { cat: 1, title: 'Топ раздач' },
