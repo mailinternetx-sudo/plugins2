@@ -1,259 +1,179 @@
-/**
- * V10 v2 Plugin для Lampa TV
- * Категории с rutor.info через TorrServer прокси
- * Версия 1.0
- */
-
-(function() {
+(function () {
     'use strict';
 
-    // ---------- КОНФИГУРАЦИЯ ----------
-    var BASE_URL = 'https://rutor.info';
-    var CATEGORIES = [
-        { name: 'Топ торренты за 24 часа', path: '/top' },
-        { name: 'Зарубежные фильмы', path: '/films/foreign/' },
-        { name: 'Наши фильмы', path: '/films/russian/' },
-        { name: 'Зарубежные сериалы', path: '/series/foreign/' },
-        { name: 'Наши сериалы', path: '/series/russian/' },
-        { name: 'Телевизор', path: '/tv/' }
-    ];
+    // Регистрируем плагин внутри экосистемы Lampa
+    Lampa.Plugins.add('detective_collections', function () {
+        
+        // ССЫЛКА НА ВАШ СЕРВЕР CLOUDFLARE WORKER
+        // Замените этот URL на адрес вашего развернутого воркера!
+        var WORKER_URL = 'https://lampa-parser.mail-internetx.workers.dev/';
 
-    // Определяем TorrServer URL
-    var TS_URL = null;
-    function getTsUrl() {
-        if (TS_URL) return TS_URL;
-        if (typeof TorrServer !== 'undefined' && TorrServer.url) TS_URL = TorrServer.url;
-        else if (typeof tsUrl !== 'undefined') TS_URL = window.tsUrl;
-        else if (typeof Lampa !== 'undefined' && Lampa.TorrServer && Lampa.TorrServer.url) TS_URL = Lampa.TorrServer.url;
-        if (!TS_URL) TS_URL = 'http://localhost:8090';
-        return TS_URL;
-    }
+        // Конфигурация категорий (рядов) на экране
+        var CATEGORIES = [
+            { id: '1', title: 'Топ раздач (Kinozal)' },
+            { id: '2', title: 'Новинки кино (Film.ru)' },
+            { id: '3', title: 'Детективы 2026 года (Mail.ru)' },
+            { id: '4', title: 'Зарубежные детективные сериалы (Film.ru)' },
+            { id: '5', title: 'Русские детективные сериалы (Mail.ru)' }
+        ];
 
-    // Запрос через прокси TorrServer (основной метод для обхода CORS и блокировок)
-    function requestViaTorrentProxy(url, callback) {
-        var ts = getTsUrl();
-        var proxyUrl = ts + '/proxy/' + encodeURIComponent(url);
-        // Если прокси не работает, пробуем прямой запрос (но обычно CORS)
-        fetch(proxyUrl)
-            .then(function(response) {
-                if (!response.ok) throw new Error('HTTP ' + response.status);
-                return response.text();
-            })
-            .then(function(html) {
-                callback(null, html);
-            })
-            .catch(function(error) {
-                console.warn('Proxy failed, trying direct:', error);
-                fetch(url)
-                    .then(function(res) {
-                        if (!res.ok) throw new Error('Direct HTTP ' + res.status);
-                        return res.text();
-                    })
-                    .then(function(html) {
-                        callback(null, html);
-                    })
-                    .catch(function(err) {
-                        callback(err, null);
+        // Создаем функциональный компонент страницы по правилам архитектуры Lampa
+        function Component(object) {
+            var network = new Lampa.Reguest(); // Используем встроенную обертку запросов Lampa
+            var scroll  = new Lampa.Scroll({ mask: true, overscroll: true });
+            var items   = [];
+            var activeRow = 0;
+            var html    = $('<div></div>');
+            var body    = $('<div class="category-full"></div>');
+
+            this.create = function () {
+                var self = this;
+                
+                // Инициализируем базовый контейнер скролла
+                html.append(scroll.render());
+                scroll.append(body);
+
+                // Запускаем последовательную загрузку категорий
+                this.load();
+
+                return this;
+            };
+
+            this.load = function () {
+                var self = this;
+                var loadedCount = 0;
+
+                CATEGORIES.forEach(function (cat, index) {
+                    var rowHtml = $('<div class="explore-row info-currenly" style="margin-bottom: 25px;"><div class="explore-row__title" style="font-size: 1.5em; margin: 10px 20px; font-weight: bold; color: #fff;">' + cat.title + '</div></div>');
+                    var rowScroll = new Lampa.Scroll({ horizontal: true, mask: true });
+                    var rowBody = $('<div class="card-inline-cards"></div>');
+
+                    rowScroll.append(rowBody);
+                    rowHtml.append(rowScroll.render());
+                    body.append(rowHtml);
+
+                    // Делаем HTTP-запрос к нашему CORS-прокси Cloudflare Worker
+                    network.silent(WORKER_URL + '?cat=' + cat.id, function (json) {
+                        if (json && json.results && json.results.length > 0) {
+                            json.results.forEach(function (data) {
+                                // Подготовка данных карточки под стандарт Lampa
+                                var cardData = {
+                                    id: data.id,
+                                    title: data.title,
+                                    original_title: data.original_title || '',
+                                    img: data.img || 'img/no_poster.png',
+                                    year: data.year || 2026,
+                                    vote_average: data.vote_average || 0
+                                };
+
+                                var card = new Lampa.Card(cardData, {
+                                    card_small: true,
+                                    card_category: true
+                                });
+                                
+                                card.create();
+                                
+                                // Логика обработки клика/выбора на старых ТВ (ОК на пульте)
+                                card.onSelect = function () {
+                                    // Вызываем глобальный встроенный поиск Lampa для нахождения раздач и онлайн-просмотра
+                                    Lampa.Activity.push({
+                                        url: '',
+                                        title: cardData.title,
+                                        component: 'search',
+                                        search: cardData.title,
+                                        page: 1
+                                    });
+                                };
+
+                                // Прокидываем события фокуса для корректного управления с пульта ДУ
+                                card.onFocus = function (target) {
+                                    scroll.update(rowHtml, 'vertical');
+                                    rowScroll.update(card.render(), 'horizontal');
+                                };
+
+                                rowBody.append(card.render());
+                                items.push(card);
+                            });
+
+                            loadedCount++;
+                            if (loadedCount === 1) {
+                                // Навешиваем навигацию Lampa.Navigator, как только отрисовался первый ряд
+                                self.pages();
+                            }
+                        }
+                    }, function () {
+                        // Обработка ошибки загрузки ряда
+                        rowBody.append('<div class="explore-row__error" style="padding: 20px; color: #aaa;">Не удалось загрузить данные категории</div>');
                     });
-            });
-    }
-
-    // Парсинг HTML rutor (максимально простой и надёжный)
-    function parseRutorHtml(html) {
-        var items = [];
-        // Создаём временный DOM
-        var div = document.createElement('div');
-        div.innerHTML = html;
-        var table = div.querySelector('#index');
-        if (!table) return items;
-        var rows = table.querySelectorAll('tr.tr1, tr.tr2');
-        for (var i = 0; i < rows.length; i++) {
-            var row = rows[i];
-            var titleCell = row.querySelector('td.td-t');
-            if (!titleCell) continue;
-            var titleLink = titleCell.querySelector('a');
-            if (!titleLink) continue;
-            var title = titleLink.textContent.trim().replace(/\s+/g, ' ');
-            // Поиск magnet-ссылки
-            var magnet = null;
-            var magnetLink = row.querySelector('a.downgif[href^="magnet:"]');
-            if (!magnetLink) magnetLink = row.querySelector('a[href^="magnet:"]');
-            if (magnetLink) magnet = magnetLink.getAttribute('href');
-            if (!magnet) continue;
-            // Размер и сидеры
-            var sizeCell = row.querySelector('td.td-size');
-            var size = sizeCell ? sizeCell.textContent.trim() : '';
-            var seedersCell = row.querySelector('td.td-s');
-            var seeders = seedersCell ? seedersCell.textContent.trim() : '0';
-            var leechersCell = row.querySelector('td.td-l');
-            var leechers = leechersCell ? leechersCell.textContent.trim() : '0';
-            // Постер (если есть)
-            var poster = null;
-            var img = titleCell.querySelector('img');
-            if (img && img.src) {
-                var posterUrl = img.src;
-                if (posterUrl.indexOf('http') !== 0) posterUrl = BASE_URL + posterUrl;
-                poster = posterUrl;
-            }
-            items.push({
-                title: title,
-                magnet: magnet,
-                size: size,
-                seeders: seeders,
-                leechers: leechers,
-                description: size + ' | S:' + seeders + ' L:' + leechers,
-                poster: poster
-            });
-        }
-        return items;
-    }
-
-    // Загрузка категории (одна страница)
-    function loadCategory(category, page, callback) {
-        var url = BASE_URL + category.path;
-        if (page > 1) {
-            url += (url.indexOf('?') === -1 ? '?' : '&') + 'page=' + page;
-        }
-        requestViaTorrentProxy(url, function(err, html) {
-            if (err) {
-                console.error('Load error:', err);
-                callback(err, null);
-                return;
-            }
-            var items = parseRutorHtml(html);
-            callback(null, items);
-        });
-    }
-
-    // Воспроизведение через TorrServer
-    function playTorrent(magnet, title) {
-        if (!magnet) {
-            Lampa.Notification.show('Нет magnet-ссылки');
-            return;
-        }
-        var ts = getTsUrl();
-        if (!ts) {
-            Lampa.Notification.show('TorrServer не настроен');
-            return;
-        }
-        // Добавляем торрент в TorrServer
-        var addUrl = ts + '/torrent/add?magnet=' + encodeURIComponent(magnet);
-        fetch(addUrl, { method: 'POST' })
-            .then(function() {
-                // Получаем поток
-                var streamUrl = ts + '/stream?magnet=' + encodeURIComponent(magnet);
-                if (typeof Lampa !== 'undefined' && Lampa.Player) {
-                    Lampa.Player.play({ file: streamUrl, title: title });
-                } else {
-                    window.location.href = streamUrl;
-                }
-            })
-            .catch(function(err) {
-                console.error('TorrServer add error', err);
-                Lampa.Notification.show('Ошибка добавления в TorrServer');
-            });
-    }
-
-    // Отображение каталога с пагинацией
-    function showCatalog(category, page, itemsSoFar, activity) {
-        var currentPage = page || 1;
-        var allItems = itemsSoFar || [];
-        loadCategory(category, currentPage, function(err, newItems) {
-            if (err || !newItems.length) {
-                Lampa.Notification.close();
-                if (allItems.length === 0) {
-                    Lampa.Notification.show('Нет торрентов в этой категории');
-                } else if (!newItems.length) {
-                    Lampa.Notification.show('Больше страниц нет');
-                }
-                return;
-            }
-            allItems = allItems.concat(newItems);
-            // Преобразуем в формат Lampa.Catalog
-            var catalogItems = allItems.map(function(item) {
-                return {
-                    title: item.title,
-                    description: item.description,
-                    poster: item.poster,
-                    rating: item.seeders,
-                    action: function() { playTorrent(item.magnet, item.title); }
-                };
-            });
-            var catalogData = {
-                title: category.name,
-                component: 'catalog',
-                type: 'movie',
-                items: catalogItems,
-                more: {
-                    title: 'Загрузить ещё',
-                    action: function() {
-                        showCatalog(category, currentPage + 1, allItems, activity);
-                    }
-                }
-            };
-            if (activity) {
-                activity.setData(catalogData);
-            } else {
-                var newActivity = new Lampa.Activity({
-                    title: category.name,
-                    component: 'catalog',
-                    data: catalogData
                 });
-                newActivity.open();
+            };
+
+            // Привязка элементов к общему навигатору Lampa (D-Pad пульта)
+            this.pages = function () {
+                if (window.explore_lines_init) return;
+                window.explore_lines_init = true;
+
+                Lampa.Background.immediately('');
+                
+                // Передаем управление контейнером встроенному диспетчеру фокуса Lampa
+                Lampa.Navigator.set({
+                    id: 'detective_collections_page',
+                    render: html,
+                    parent: this.object,
+                    onBack: function () {
+                        Lampa.Activity.onBack();
+                    }
+                });
+            };
+
+            // Метод вызывается платформой при фокусе на вкладке плагина
+            this.start = function () {
+                Lampa.Navigator.focus('detective_collections_page');
+            };
+
+            this.render = function () {
+                return html;
+            };
+
+            // Обязательный метод деструктора для предотвращения утечек памяти на WebOS/Tizen
+            this.destroy = function () {
+                network.clear();
+                scroll.destroy();
+                if (items) {
+                    items.forEach(function (item) {
+                        if (item.destroy) item.destroy();
+                    });
+                }
+                items = null;
+                html.remove();
+                body.remove();
+                window.explore_lines_init = false;
+            };
+        }
+
+        // Интегрируем плагин в левое меню (Каталог) Lampa
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') {
+                // Создаем пункт меню "Детективы 2026"
+                var menu_item = $('<div class="menu__item selector" data-action="detective_pack">' +
+                    '<span class="menu__text">Детективы 2026</span>' +
+                    '</div>');
+
+                // Обработка клика по пункту меню
+                menu_item.on('hover:enter', function () {
+                    Lampa.Activity.push({
+                        title: 'Детективы 2026',
+                        component: 'detective_collections', // Вызов нашего зарегистрированного компонента
+                        page: 1
+                    });
+                });
+
+                // Вставляем пункт меню в левую панель Lampa перед разделом "Закладки"
+                $('.menu .menu__list').find('[data-action="bookmark"]').before(menu_item);
             }
         });
-    }
 
-    // Показать список категорий
-    function showCategories() {
-        var listItems = CATEGORIES.map(function(cat) {
-            return {
-                title: cat.name,
-                description: 'Нажмите для просмотра',
-                action: function() {
-                    showCatalog(cat, 1, [], null);
-                }
-            };
-        });
-        var activity = new Lampa.Activity({
-            title: 'V10 v2 — Категории',
-            component: 'list',
-            data: listItems
-        });
-        activity.open();
-    }
-
-    // ---------- ДОБАВЛЕНИЕ КНОПКИ В ЛЕВОЕ МЕНЮ ----------
-    function addMenuButton() {
-        if (typeof Lampa === 'undefined' || !Lampa.Menu) {
-            console.warn('Lampa.Menu не доступен');
-            return false;
-        }
-        try {
-            Lampa.Menu.add({
-                title: 'V10 v2',
-                icon: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="white" width="24px" height="24px"><path d="M0 0h24v24H0z" fill="none"/><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15h-2v-2h2v2zm0-4h-2V7h2v6z"/></svg>',
-                action: showCategories
-            });
-            if (Lampa.Menu.update) Lampa.Menu.update();
-            console.log('[V10 v2] Кнопка добавлена');
-            return true;
-        } catch(e) {
-            console.error('[V10 v2] Ошибка добавления кнопки', e);
-            return false;
-        }
-    }
-
-    // ---------- ИНИЦИАЛИЗАЦИЯ ----------
-    function init() {
-        if (typeof Lampa !== 'undefined' && Lampa.Listener) {
-            Lampa.Listener.follow('ready', addMenuButton);
-            if (Lampa.Component && Lampa.Component.isReady) addMenuButton();
-        } else {
-            document.addEventListener('lampa:ready', addMenuButton);
-            setTimeout(addMenuButton, 2000);
-        }
-    }
-
-    init();
+        // Регистрация кастомного компонента в фабрике компонентов Lampa
+        Lampa.Component.add('detective_collections', Component);
+    });
 })();
