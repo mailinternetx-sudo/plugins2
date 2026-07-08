@@ -1,198 +1,247 @@
+/**
+ * Плагин Lampa: кастомные карусели с внешних источников через Cloudflare Worker
+ * Совместимость: WebOS 3.0+/4.0+, Tizen — только ES5, без стрелочных функций,
+ * без let/const в критичных областях, без деструктуризации и шаблонных строк.
+ *
+ * Подключение: Настройки -> Расширения -> вставить URL до этого файла
+ */
+
 (function () {
-    'use strict';
+  'use strict';
 
-    // Регистрируем плагин внутри экосистемы Lampa
-    Lampa.Plugins.add('detective_collections', function () {
-        
-        // ССЫЛКА НА ВАШ СЕРВЕР CLOUDFLARE WORKER
-        // Замените этот URL на адрес вашего развернутого воркера!
-        var WORKER_URL = 'https://lampa-parser.mail-internetx.workers.dev/';
+  Lampa.Plugins.add('my_custom_cards', function () {
 
-        // Конфигурация категорий (рядов) на экране
-        var CATEGORIES = [
-            { id: '1', title: 'Топ раздач (Kinozal)' },
-            { id: '2', title: 'Новинки кино (Film.ru)' },
-            { id: '3', title: 'Детективы 2026 года (Mail.ru)' },
-            { id: '4', title: 'Зарубежные детективные сериалы (Film.ru)' },
-            { id: '5', title: 'Русские детективные сериалы (Mail.ru)' }
-        ];
+    // ==================== НАСТРОЙКИ ====================
 
-        // Создаем функциональный компонент страницы
-        function Component(object) {
-            var network = new Lampa.Reguest();
-            var scroll  = new Lampa.Scroll({ mask: true, overscroll: true });
-            var items   = [];
-            var html    = $('<div></div>');
-            var body    = $('<div class="category-full"></div>');
+    // !!! ВСТАВЬТЕ СЮДА СВОЙ URL CLOUDFLARE WORKER (без слэша на конце) !!!
+    var PROXY_URL = 'https://lampa-parser.mail-internetx.workers.dev/';
 
-            this.create = function () {
-                html.append(scroll.render());
-                scroll.append(body);
-                this.load();
-                return this;
-            };
+    var CATEGORIES = [
+      { cat: 1, title: 'Топ раздач' },
+      { cat: 2, title: 'Новинки кино' },
+      { cat: 3, title: 'Детективы 2026 года' },
+      { cat: 4, title: 'Зарубежные детективные сериалы' },
+      { cat: 5, title: 'Русские детективные сериалы' }
+    ];
 
-            this.load = function () {
-                var self = this;
-                var loadedCount = 0;
+    var REQUEST_TIMEOUT = 12000;
 
-                CATEGORIES.forEach(function (cat) {
-                    var rowHtml = $('<div class="explore-row info-currenly" style="margin-bottom: 25px;"><div class="explore-row__title" style="font-size: 1.5em; margin: 10px 20px; font-weight: bold; color: #fff;">' + cat.title + '</div></div>');
-                    var rowScroll = new Lampa.Scroll({ horizontal: true, mask: true });
-                    var rowBody = $('<div class="card-inline-cards"></div>');
+    // ==================== СЕТЕВОЙ СЛОЙ ====================
 
-                    rowScroll.append(rowBody);
-                    rowHtml.append(rowScroll.render());
-                    body.append(rowHtml);
+    // Обёртка над XHR, совместимая со старыми движками WebOS/Tizen
+    function requestJson(url, onSuccess, onError) {
+      var xhr = new XMLHttpRequest();
+      var finished = false;
 
-                    network.silent(WORKER_URL + '?cat=' + cat.id, function (json) {
-                        if (json && json.results && json.results.length > 0) {
-                            json.results.forEach(function (data) {
-                                var cardData = {
-                                    id: data.id,
-                                    title: data.title,
-                                    original_title: data.original_title || '',
-                                    img: data.img || 'img/no_poster.png',
-                                    year: data.year || 2026,
-                                    vote_average: data.vote_average || 0
-                                };
+      var timer = setTimeout(function () {
+        if (finished) return;
+        finished = true;
+        try { xhr.abort(); } catch (e) {}
+        onError('timeout');
+      }, REQUEST_TIMEOUT);
 
-                                var card = new Lampa.Card(cardData, {
-                                    card_small: true,
-                                    card_category: true
-                                });
-                                
-                                card.create();
-                                
-                                card.onSelect = function () {
-                                    Lampa.Activity.push({
-                                        url: '',
-                                        title: cardData.title,
-                                        component: 'search',
-                                        search: cardData.title,
-                                        page: 1
-                                    });
-                                };
+      xhr.open('GET', url, true);
+      xhr.timeout = REQUEST_TIMEOUT;
 
-                                card.onFocus = function () {
-                                    scroll.update(rowHtml, 'vertical');
-                                    rowScroll.update(card.render(), 'horizontal');
-                                };
+      xhr.onreadystatechange = function () {
+        if (xhr.readyState !== 4) return;
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
 
-                                rowBody.append(card.render());
-                                items.push(card);
-                            });
-
-                            loadedCount++;
-                            if (loadedCount === 1) {
-                                self.pages();
-                            }
-                        }
-                    }, function () {
-                        rowBody.append('<div class="explore-row__error" style="padding: 20px; color: #aaa;">Не удалось загрузить данные категории</div>');
-                    });
-                });
-            };
-
-            this.pages = function () {
-                if (window.explore_lines_init) return;
-                window.explore_lines_init = true;
-
-                Lampa.Background.immediately('');
-                
-                Lampa.Navigator.set({
-                    id: 'detective_collections_page',
-                    render: html,
-                    parent: this.object,
-                    onBack: function () {
-                        Lampa.Activity.onBack();
-                    }
-                });
-            };
-
-            this.start = function () {
-                Lampa.Navigator.focus('detective_collections_page');
-            };
-
-            this.render = function () {
-                return html;
-            };
-
-            this.destroy = function () {
-                network.clear();
-                scroll.destroy();
-                if (items) {
-                    items.forEach(function (item) {
-                        if (item.destroy) item.destroy();
-                    });
-                }
-                items = null;
-                html.remove();
-                body.remove();
-                window.explore_lines_init = false;
-            };
+        if (xhr.status >= 200 && xhr.status < 300) {
+          var data;
+          try {
+            data = JSON.parse(xhr.responseText);
+          } catch (e) {
+            onError('parse_error');
+            return;
+          }
+          onSuccess(data);
+        } else {
+          onError('http_' + xhr.status);
         }
+      };
 
-        // Регистрируем компонент страницы в системе
-        Lampa.Component.add('detective_collections', Component);
+      xhr.onerror = function () {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        onError('network_error');
+      };
 
-        // Функция гарантированного внедрения кнопки в меню
-        function injectMenuButton() {
-            // Проверяем, нет ли уже этой кнопки, чтобы избежать дублирования
-            if ($('.menu__list [data-action="detective_pack"]').length > 0) return;
+      xhr.send();
+    }
 
-            var menuList = $('.menu .menu__list');
-            if (menuList.length > 0) {
-                // Создаем элемент меню по официальному шаблону Lampa
-                var menu_item = $('<div class="menu__item selector" data-action="detective_pack">' +
-                    '<span class="menu__text">Детективы 2026</span>' +
-                    '</div>');
+    // ==================== ПОСТРОЕНИЕ КАРУСЕЛИ ====================
 
-                // Используем универсальный обработрчик клика/энтера для Smart TV
-                menu_item.on('click hover:enter', function (e) {
-                    e.preventDefault();
-                    
-                    // Закрываем меню (полезно на мобильных и некоторых интерфейсах ТВ)
-                    if (Lampa.Menu && Lampa.Menu.close) Lampa.Menu.close();
+    // Создаёт один ряд (карусель) карточек для категории
+    function buildLine(container, categoryConfig, results) {
+      var lineTitle = document.createElement('div');
+      lineTitle.className = 'category-full__title';
+      lineTitle.innerText = categoryConfig.title;
+      container.appendChild(lineTitle);
 
-                    Lampa.Activity.push({
-                        title: 'Детективы 2026',
-                        component: 'detective_collections',
-                        page: 1
-                    });
-                });
+      var scroll = new Lampa.Scroll({ mask: true, over: true });
+      var body = scroll.render ? scroll.render() : scroll.body;
 
-                // Находим кнопку "Закладки" или "Фильмы", чтобы встать рядом
-                var anchor = menuList.find('[data-action="bookmark"]');
-                if (anchor.length === 0) anchor = menuList.find('[data-action="movie"]');
-                
-                if (anchor.length > 0) {
-                    anchor.before(menu_item);
-                } else {
-                    menuList.append(menu_item); // Если ничего не нашли, просто кидаем в конец
-                }
+      var wrapItems = document.createElement('div');
+      wrapItems.className = 'items-line';
 
-                // Перезапускаем навигацию меню, чтобы Lampa увидела новый селектор пульта
-                if (Lampa.Menu && Lampa.Menu.update) Lampa.Menu.update();
-            }
-        }
+      var i;
+      for (i = 0; i < results.length; i++) {
+        var item = results[i];
+        var cardEl = buildCard(item);
+        wrapItems.appendChild(cardEl);
+      }
 
-        // Попытка №1: Срабатывает при старте приложения
-        Lampa.Listener.follow('app', function (e) {
-            if (e.type === 'ready') {
-                injectMenuButton();
-            }
+      if (scroll.append) {
+        scroll.append(wrapItems);
+      } else {
+        body.appendChild(wrapItems);
+      }
+
+      container.appendChild(body);
+
+      // Регистрация навигации пультом ДУ по карточкам ряда
+      Lampa.Controller.enable && Lampa.Controller.add('content', {
+        toggle: function () {}
+      });
+    }
+
+    // Создаёт DOM-элемент одной карточки на базе Lampa.Card, с фолбэком на чистый DOM
+    function buildCard(item) {
+      var cardData = {
+        title: item.title,
+        img: item.img || './img/img_broken.svg',
+        release_date: item.year,
+        vote_average: item.vote_average,
+        id: item.id,
+        source: 'custom'
+      };
+
+      var cardWrapper = document.createElement('div');
+      cardWrapper.className = 'card selector';
+      cardWrapper.setAttribute('data-id', item.id);
+
+      var poster = document.createElement('div');
+      poster.className = 'card__view';
+
+      var img = document.createElement('img');
+      img.className = 'card__img';
+      img.src = cardData.img;
+      img.onerror = function () {
+        img.src = './img/img_broken.svg';
+      };
+      poster.appendChild(img);
+
+      var titleEl = document.createElement('div');
+      titleEl.className = 'card__title';
+      titleEl.innerText = item.title;
+
+      var yearEl = document.createElement('div');
+      yearEl.className = 'card__age';
+      yearEl.innerText = item.year || '';
+
+      cardWrapper.appendChild(poster);
+      cardWrapper.appendChild(titleEl);
+      cardWrapper.appendChild(yearEl);
+
+      // Обработка выбора карточки пультом/кликом — запуск внутреннего поиска Lampa
+      cardWrapper.addEventListener('hover:enter', function () {
+        onCardSelect(item);
+      });
+      cardWrapper.addEventListener('click', function () {
+        onCardSelect(item);
+      });
+
+      return cardWrapper;
+    }
+
+    // При выборе карточки — переход к стандартному поиску Lampa по названию,
+    // чтобы пользователь мог найти контент через торренты/онлайн-балансеры
+    function onCardSelect(item) {
+      Lampa.Activity.push({
+        url: '',
+        title: item.title,
+        component: 'search',
+        search: item.title,
+        page: 1
+      });
+    }
+
+    // ==================== ГЛАВНЫЙ КОМПОНЕНТ ====================
+
+    function initCustomComponent() {
+      var container = document.createElement('div');
+      container.className = 'custom-cards-page';
+
+      var loadedCount = 0;
+
+      function loadCategory(index) {
+        if (index >= CATEGORIES.length) return;
+
+        var conf = CATEGORIES[index];
+        var apiUrl = PROXY_URL + '/?cat=' + conf.cat;
+
+        requestJson(apiUrl, function (data) {
+          loadedCount++;
+          if (data && data.results && data.results.length) {
+            buildLine(container, conf, data.results);
+          }
+          loadCategory(index + 1);
+        }, function (errCode) {
+          // Логируем ошибку категории, но не прерываем загрузку остальных
+          if (window.console) {
+            console.log('[my_custom_cards] Ошибка загрузки категории ' + conf.title + ': ' + errCode);
+          }
+          loadCategory(index + 1);
         });
+      }
 
-        // Попытка №2: Страховка для медленных ТВ (WebOS/Tizen), если DOM меню формируется позже
-        var timerCount = 0;
-        var menuTimer = setInterval(function () {
-            timerCount++;
-            if ($('.menu .menu__list').length > 0) {
-                injectMenuButton();
-                clearInterval(menuTimer);
-            }
-            if (timerCount > 30) clearInterval(menuTimer); // Защита от вечного цикла (15 секунд)
-        }, 500);
+      loadCategory(0);
+
+      return container;
+    }
+
+    // Регистрируем свой компонент/активность в Lampa
+    Lampa.Component.add('custom_cards', {
+      create: function () {
+        return initCustomComponent();
+      }
     });
+
+    // ==================== ИНТЕГРАЦИЯ В ГЛАВНОЕ МЕНЮ ====================
+
+    // Добавляем пункт в главное меню Lampa для перехода к нашим каруселям
+    Lampa.Listener.follow('app', function (event) {
+      if (event.type !== 'ready') return;
+
+      var menuItem = $('<li class="menu__item selector" data-action="custom_cards">' +
+        '<div class="menu__ico">' +
+        '<svg width="24" height="24" viewBox="0 0 24 24" fill="none">' +
+        '<rect x="2" y="4" width="20" height="16" rx="2" stroke="currentColor" stroke-width="2"/>' +
+        '</svg>' +
+        '</div>' +
+        '<div class="menu__text">Подборки</div>' +
+        '</li>');
+
+      menuItem.on('hover:enter', function () {
+        Lampa.Activity.push({
+          url: '',
+          title: 'Подборки',
+          component: 'custom_cards'
+        });
+      });
+
+      $('.menu .menu__list').eq(0).append(menuItem);
+    });
+
+  });
+
+  // Инициализация плагина при подключении файла
+  if (window.Lampa && Lampa.Plugins) {
+    // уже добавлено выше через Lampa.Plugins.add
+  }
+
 })();
