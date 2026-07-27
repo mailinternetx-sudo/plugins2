@@ -367,7 +367,7 @@
             '95.67.104.126:43871',
             '178.150.115.242:8090',
             '95.165.134.227:8090',
-            'ts.maxvol.pro:8090'
+            'https://ts.maxvol.pro/'
         ];
 
         var STORAGE_PRIMARY = 'torrserver_url';
