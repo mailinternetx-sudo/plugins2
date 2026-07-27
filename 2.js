@@ -1,48 +1,352 @@
 /**
- * TorrServer Switcher — плагин для Lampa
- *
- * Что делает:
- *  - Добавляет в Настройки Lampa раздел "TorrServer" со списком заданных
- *    адресов серверов.
- *  - При открытии списка каждый адрес "пингуется" (короткий HTTP-запрос
- *    с таймаутом) и помечается 🟢 (отвечает) или 🔴 (не отвечает) —
- *    статус актуален на момент открытия, а не закэширован.
- *  - Позволяет выбрать ОСНОВНОЙ адрес (записывается в тот же ключ
- *    хранилища, который использует сам Lampa для TorrServer —
- *    'torrserver_url', то есть реально влияет на воспроизведение)
- *    и РЕЗЕРВНЫЙ адрес (свой ключ плагина).
- *  - Раз в 5 минут в фоне проверяет текущий основной адрес; если он
- *    не отвечает, а резервный отвечает — автоматически переключается
- *    на резервный и показывает уведомление.
- *  - Дублирующий пункт в главном меню — на случай, если в конкретной
- *    сборке Lampa раздел Настроек рендерится нестандартно, доступ к
- *    списку серверов остаётся гарантирован через меню.
- *
- * ВАЖНО (честно, чтобы не было сюрпризов):
- *  - Проверка серверов идёт через fetch(..., {mode:'no-cors'}) — это
- *    единственный способ "пропинговать" произвольный IP:порт из
- *    браузерного JS без CORS-заголовков на стороне TorrServer. Если
- *    интерфейс Lampa у вас загружен по HTTPS, а адреса серверов — по
- *    обычному HTTP, браузер может заблокировать запрос как "смешанный
- *    контент" (mixed content) — тогда сервер будет ошибочно показан
- *    красным, хотя работает. В штатной установке Lampa (desktop/Android/
- *    TV-приложение), где сам TorrServer тоже обычно подключается по
- *    HTTP, это не проблема — так же, как и штатная интеграция TorrServer
- *    в Lampa.
+ * Lampa Combined Plugin: V10 + TorrServer Switcher + Pubtorr Categories + Jackett
  */
 (function () {
     'use strict';
 
-    var PLUGIN_ID = 'torrserver_switcher';
-    if (window[PLUGIN_ID + '_ready']) return;
-    window[PLUGIN_ID + '_ready'] = true;
+    var SOURCE_NAME = 'V10';
+    var WORKER_URL  = 'https://my-proxy-worker.mail-internetx.workers.dev/';
+
+    var TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
+    var TMDB_BG  = 'https://image.tmdb.org/t/p/original';
 
     // ================================================================
-    //  СПИСОК АДРЕСОВ
+    //  КАТЕГОРИИ (Включая выбор каталогов из pubtorr.js и jackett)
     // ================================================================
+    var CATEGORIES = [
+        { title: 'Топ 24 часа',                  url: 'top24',                method: 'movie', page_size_preview: 25, page_size: 25 },
+        { title: 'Зарубежные фильмы',            url: 'movies',               method: 'movie', page_size_preview: 15, page_size: 15 },
+        { title: 'Наши фильмы',                  url: 'movies_ru',            method: 'movie', page_size_preview: 15, page_size: 15 },
+        { title: 'Зарубежные сериалы',           url: 'tv_shows',             method: 'tv',    page_size_preview: 15, page_size: 15 },
+        { title: 'Русские сериалы',              url: 'tv_shows_ru',          method: 'tv',    page_size_preview: 15, page_size: 15 },
+        { title: 'Русские детективные сериалы',  url: 'russian_detective_tv', method: 'tv',    page_size_preview: 60, page_size: 60 },
+        { title: 'Телевизор',                    url: 'televizor',            method: 'tv',    page_size_preview: 15, page_size: 15 },
+        { title: 'Юмор',                         url: 'humor',                method: 'tv',    page_size_preview: 15, page_size: 15 },
+        // Интегрированные каталоги парсеров (pubtorr & jackett)
+        { title: 'Pubtorr: Новинки',             url: 'pubtorr_new',          method: 'movie', page_size_preview: 15, page_size: 15 },
+        { title: 'Jackett: Раздачи',             url: 'jackett_index',        method: 'movie', page_size_preview: 15, page_size: 15 }
+    ];
+
+    // ================================================================
+    //  УТИЛИТЫ ДЛЯ ПОСТЕРОВ
+    // ================================================================
+    function buildImg(item) {
+        if (item.img && item.img.startsWith('http')) return item.img;
+        if (item.poster_path) {
+            if (item.poster_path.startsWith('http')) return item.poster_path;
+            if (item.poster_path.startsWith('/t/p/')) {
+                return 'https://image.tmdb.org' + item.poster_path;
+            }
+            return TMDB_IMG + item.poster_path;
+        }
+        return '';
+    }
+
+    function buildBg(item) {
+        if (item.background_image && item.background_image.startsWith('http')) {
+            return item.background_image;
+        }
+        if (item.backdrop_path) {
+            if (item.backdrop_path.startsWith('http')) return item.backdrop_path;
+            if (item.backdrop_path.startsWith('/t/p/')) {
+                return 'https://image.tmdb.org' + item.backdrop_path;
+            }
+            return TMDB_BG + item.backdrop_path;
+        }
+        return '';
+    }
+
+    // ================================================================
+    //  ОПРЕДЕЛЕНИЕ ТИПА
+    // ================================================================
+    function detectMediaMethod(item) {
+        if (!item) return 'movie';
+        if (item.method === 'tv' || item.type === 'tv') return 'tv';
+        if (item.method === 'movie' || item.type === 'movie') return 'movie';
+        if (
+            item.number_of_seasons ||
+            item.seasons ||
+            item.first_air_date
+        ) return 'tv';
+        return 'movie';
+    }
+
+    // ================================================================
+    //  NORMALIZE
+    // ================================================================
+    function normalizeCard(item) {
+        var img = buildImg(item);
+        var bg  = buildBg(item);
+
+        var posterPath = item.poster_path || '';
+        if (posterPath && !posterPath.startsWith('/t/p/') && !posterPath.startsWith('http')) {
+            posterPath = '/t/p/w500' + posterPath;
+        }
+
+        var backdropPath = item.backdrop_path || '';
+        if (backdropPath && !backdropPath.startsWith('/t/p/') && !backdropPath.startsWith('http')) {
+            backdropPath = '/t/p/original' + backdropPath;
+        }
+
+        var title  = item.title || item.name || '';
+        var method = item.method || detectMediaMethod(item);
+
+        return {
+            id: item.id || Math.floor(Math.random() * 1000000),
+            title: title,
+            name: item.name || title,
+            original_title: item.original_title || title,
+            overview: item.overview || '',
+            poster_path: posterPath,
+            backdrop_path: backdropPath,
+            img: img,
+            background_image: bg,
+            vote_average: item.vote_average || 0,
+            release_date: item.release_date || '',
+            first_air_date: item.first_air_date || '',
+            number_of_seasons: item.number_of_seasons || undefined,
+            type: method,
+            method: method,
+            release_quality: item.release_quality || '',
+            source: SOURCE_NAME,
+            promo_title: item.promo_title || title,
+            promo: item.promo || item.overview || ''
+        };
+    }
+
+    // ================================================================
+    //  API SERVICE
+    // ================================================================
+    function RutorApiService() {
+        var self = this;
+        self.network = new Lampa.Reguest();
+        var clientSeen = {};
+
+        function seenKey(card) {
+            var id = card && card.id ? String(card.id) : '';
+            var t  = ((card && (card.title || card.name)) || '').toLowerCase()
+                        .replace(/[^\u0400-\u04ffa-z0-9]/gi, '').slice(0, 80);
+            return id + '|' + t;
+        }
+
+        function dedupClient(catUrl, cards, resetPage) {
+            if (resetPage || !clientSeen[catUrl]) clientSeen[catUrl] = {};
+            var bag = clientSeen[catUrl];
+            var out = [];
+            for (var i = 0; i < cards.length; i++) {
+                var k = seenKey(cards[i]);
+                if (!k || bag[k]) continue;
+                bag[k] = 1;
+                out.push(cards[i]);
+            }
+            return out;
+        }
+
+        function forceCardType(meta, cards) {
+            if (!meta || meta.method !== 'tv') return cards;
+            return cards.map(function (card) {
+                card.type   = 'tv';
+                card.method = 'tv';
+                if (!card.first_air_date && card.release_date) {
+                    card.first_air_date = card.release_date;
+                }
+                return card;
+            });
+        }
+
+        self._fetchRaw = function (url, onComplete, onError) {
+            self.network.silent(
+                url,
+                function (json) {
+                    if (!json || !json.results) {
+                        onComplete({ results: [], total_pages: 1, page: 1, total_results: 0 });
+                        return;
+                    }
+                    onComplete({
+                        results: json.results.map(normalizeCard),
+                        page: json.page || 1,
+                        total_pages: json.total_pages || 1,
+                        total_results: json.total_results || json.results.length
+                    });
+                },
+                function (err) {
+                    console.warn('[V10] fetch error:', url, err);
+                    if (onError) onError(err);
+                    else {
+                        onComplete({ results: [], total_pages: 1, page: 1, total_results: 0 });
+                    }
+                }
+            );
+        };
+
+        self.search = function (params, onComplete) {
+            var query = (params.query || '').trim();
+            if (!query) { onComplete({ results: [] }); return; }
+            var url = WORKER_URL + 'search?query=' + encodeURIComponent(query);
+            self.network.silent(
+                url,
+                function (json) {
+                    if (!json || !json.results) { onComplete({ results: [] }); return; }
+                    onComplete({
+                        results: json.results.map(normalizeCard),
+                        page: json.page || 1,
+                        total_pages: json.total_pages || 1
+                    });
+                },
+                function () { onComplete({ results: [] }); }
+            );
+        };
+
+        self.category = function (params, onSuccess) {
+            var rows  = [];
+            var total = CATEGORIES.length;
+            var done  = 0;
+
+            CATEGORIES.forEach(function (cat) {
+                var pageSize = cat.page_size_preview || 15;
+                var url = WORKER_URL + cat.url + '?page=1&page_size=' + pageSize;
+
+                self._fetchRaw(url, function (data) {
+                    var unique = dedupClient(cat.url, data.results, true);
+                    unique = forceCardType(cat, unique);
+
+                    rows.push({
+                        title: cat.title,
+                        results: unique,
+                        url: cat.url,
+                        source: SOURCE_NAME,
+                        total_pages: data.total_pages || 1
+                    });
+
+                    done++;
+                    if (done === total) {
+                        rows.sort(function (a, b) {
+                            var ia = CATEGORIES.findIndex(function (c) { return c.url === a.url; });
+                            var ib = CATEGORIES.findIndex(function (c) { return c.url === b.url; });
+                            return ia - ib;
+                        });
+                        onSuccess(rows);
+                    }
+                });
+            });
+        };
+
+        self.list = function (params, onComplete) {
+            var page     = params.page || 1;
+            var catUrl   = params.url  || 'top24';
+            var meta     = CATEGORIES.find(function (c) { return c.url === catUrl; });
+            var pageSize = params.page_size || (meta && meta.page_size) || 15;
+            var url = WORKER_URL + catUrl + '?page=' + page + '&page_size=' + pageSize;
+
+            self._fetchRaw(
+                url,
+                function (data) {
+                    var unique = dedupClient(catUrl, data.results, page === 1);
+                    unique = forceCardType(meta, unique);
+
+                    onComplete({
+                        results:       unique,
+                        page:          data.page          || page,
+                        total_pages:   data.total_pages   || 1,
+                        total_results: data.total_results || unique.length
+                    });
+                },
+                function () {
+                    onComplete({ results: [], page: page, total_pages: 1, total_results: 0 });
+                }
+            );
+        };
+
+        self.full = function (params, onSuccess) {
+            var card   = params.card || params;
+            var method = card.method || card.type || detectMediaMethod(card);
+
+            params.method = method;
+            if (card && typeof card === 'object') {
+                card.method = method;
+                card.type   = method;
+            }
+
+            var savedImg     = params.img || (card && card.img) || '';
+            var savedBg      = params.background_image || (card && card.background_image) || '';
+            var savedQuality = params.release_quality || (card && card.release_quality) || '';
+
+            function fallbackFull(data) {
+                data = data || {};
+                if (!data.title)            data.title = card.title || card.name || '';
+                if (!data.img && savedImg) data.img = savedImg;
+                if (!data.background_image && savedBg)     data.background_image = savedBg;
+                if (!data.release_quality && savedQuality) data.release_quality  = savedQuality;
+                data.type   = method;
+                data.method = method;
+                for (var k in card) {
+                    if (card.hasOwnProperty(k) && data[k] === undefined) data[k] = card[k];
+                }
+                onSuccess(data);
+            }
+
+            if (!card.id || card.id <= 0 || String(card.id).length < 3) {
+                fallbackFull({});
+                return;
+            }
+
+            Lampa.Api.sources.tmdb.full(
+                params,
+                function (data) {
+                    if (!data || !data.title) {
+                        fallbackFull(data);
+                    } else {
+                        if (!data.img && savedImg) data.img = savedImg;
+                        if (!data.background_image && savedBg)     data.background_image = savedBg;
+                        if (!data.release_quality && savedQuality) data.release_quality  = savedQuality;
+                        data.type   = method;
+                        data.method = method;
+                        onSuccess(data);
+                    }
+                },
+                function () { fallbackFull({}); }
+            );
+        };
+    }
+
+    // ================================================================
+    //  MENU ITEM FOR V10
+    // ================================================================
+    function addMenuItem() {
+        if ($('.menu__item[data-action="v10"]').length) return;
+
+        var item = $(
+            '<li class="menu__item selector" data-action="v10">' +
+                '<div class="menu__ico">' +
+                    '<svg height="36" viewBox="0 0 24 24" width="36" fill="currentColor">' +
+                        '<path d="M12 2L2 8V20H8V14H16V20H22V8L12 2ZM4 10L12 6L20 10V18H17V12H7V18H4V10Z"/>' +
+                        '<path d="M9 13H15V15H9V13Z"/>' +
+                    '</svg>' +
+                '</div>' +
+                '<div class="menu__text">' + SOURCE_NAME + '</div>' +
+            '</li>'
+        );
+
+        item.on('hover:enter', function () {
+            Lampa.Activity.push({
+                title: SOURCE_NAME,
+                component: 'category',
+                source: SOURCE_NAME,
+                method: 'category'
+            });
+        });
+
+        var $after = $('.menu__list [data-action="movie"], .menu__list [data-action="tv"]').first().parent();
+        if ($after.length) $after.after(item);
+        else               $('.menu__list').append(item);
+    }
+
+    // ================================================================
+    //  TORRSERVER SWITCHER INTEGRATION
+    // ================================================================
+    var TS_PLUGIN_ID = 'torrserver_switcher';
     var SERVERS = [
         '178.150.255.251:8090',
-        'https://ts.maxvol.pro/',
         '109.237.108.184:8090',
         '95.174.115.119:8888',
         '91.201.54.146:8090',
@@ -52,15 +356,11 @@
         '95.165.134.227:8090'
     ];
 
-    var STORAGE_PRIMARY = 'torrserver_url';            // ключ, реально используемый Lampa
-    var STORAGE_BACKUP   = 'torrserver_switcher_backup'; // резервный адрес (только для этого плагина)
+    var STORAGE_PRIMARY = 'torrserver_url';
+    var STORAGE_BACKUP  = 'torrserver_switcher_backup';
+    var CHECK_TIMEOUT       = 4000;
+    var AUTO_CHECK_INTERVAL = 5 * 60000;
 
-    var CHECK_TIMEOUT        = 4000;       // таймаут пинга одного сервера, мс
-    var AUTO_CHECK_INTERVAL  = 5 * 60000;  // как часто проверять основной сервер в фоне
-
-    // ================================================================
-    //  УТИЛИТЫ
-    // ================================================================
     function normalizeUrl(raw) {
         var u = (raw || '').trim();
         if (!u) return '';
@@ -76,9 +376,6 @@
         try { Lampa.Noty.show(text); } catch (e) { console.log('[TS-Switcher] ' + text); }
     }
 
-    // ================================================================
-    //  ПРОВЕРКА ДОСТУПНОСТИ ОДНОГО СЕРВЕРА
-    // ================================================================
     function checkServer(url, cb) {
         var full = normalizeUrl(url);
         var done = false;
@@ -117,8 +414,6 @@
         }
     }
 
-    // Проверяет весь список параллельно, возвращает [{addr, url, ok}, ...]
-    // в исходном порядке SERVERS.
     function checkAll(onDone) {
         var results = new Array(SERVERS.length);
         var left = SERVERS.length;
@@ -134,9 +429,6 @@
         });
     }
 
-    // ================================================================
-    //  ХРАНИЛИЩЕ
-    // ================================================================
     function getPrimary() { return Lampa.Storage.get(STORAGE_PRIMARY, ''); }
     function getBackup()  { return Lampa.Storage.get(STORAGE_BACKUP, ''); }
 
@@ -149,11 +441,7 @@
         if (!silent) noty('Резервный сервер TorrServer: ' + shortAddr(url));
     }
 
-    // ================================================================
-    //  СПИСОК ВЫБОРА С ЖИВЫМ СТАТУСОМ
-    // ================================================================
     function pickServer(mode) {
-        // mode: 'primary' | 'backup'
         noty('Проверка серверов TorrServer…');
 
         checkAll(function (results) {
@@ -171,13 +459,11 @@
             });
 
             Lampa.Select.show({
-                title: mode === 'primary'
-                    ? 'TorrServer — основной адрес'
-                    : 'TorrServer — резервный адрес',
+                title: mode === 'primary' ? 'TorrServer — основной адрес' : 'TorrServer — резервный адрес',
                 items: items,
                 onSelect: function (item) {
                     if (!item.ok) {
-                        noty('⚠ Этот сервер сейчас не отвечает. Выбран, но лучше выбрать зелёный.');
+                        noty('⚠ Этот сервер сейчас не отвечает.');
                     }
                     if (mode === 'primary') setPrimary(item.url);
                     else setBackup(item.url);
@@ -190,34 +476,25 @@
         });
     }
 
-    // ================================================================
-    //  ФОНОВЫЙ АВТО-FAILOVER: если основной перестал отвечать —
-    //  переключаемся на резервный (если он задан и жив).
-    // ================================================================
     function autoFailoverCheck() {
         var primary = getPrimary();
         var backup  = getBackup();
         if (!primary || !backup) return;
 
         checkServer(primary, function (primaryOk) {
-            if (primaryOk) return; // всё в порядке, ничего не делаем
-
+            if (primaryOk) return;
             checkServer(backup, function (backupOk) {
-                if (!backupOk) return; // и резервный недоступен — оставляем как есть
-
+                if (!backupOk) return;
                 setPrimary(backup, true);
-                noty('⚠ Основной TorrServer не отвечает. Автоматически переключено на резервный: ' + shortAddr(backup));
+                noty('⚠ Основной TorrServer не отвечает. Переключено на резервный: ' + shortAddr(backup));
             });
         });
     }
 
-    // ================================================================
-    //  НАСТРОЙКИ LAMPA
-    // ================================================================
     function addSettings() {
         try {
             Lampa.SettingsApi.addComponent({
-                component: PLUGIN_ID,
+                component: TS_PLUGIN_ID,
                 icon: '<svg height="60" viewBox="0 0 24 24" width="60" fill="currentColor">' +
                           '<path d="M4 3H20C21.1 3 22 3.9 22 5V9C22 10.1 21.1 11 20 11H4C2.9 11 2 10.1 2 9V5C2 3.9 2.9 3 4 3ZM4 13H20C21.1 13 22 13.9 22 15V19C22 20.1 21.1 21 20 21H4C2.9 21 2 20.1 2 19V15C2 13.9 2.9 13 4 13ZM6 6.5C5.45 6.5 5 6.95 5 7.5C5 8.05 5.45 8.5 6 8.5C6.55 8.5 7 8.05 7 7.5C7 6.95 6.55 6.5 6 6.5ZM6 16.5C5.45 16.5 5 16.95 5 17.5C5 18.05 5.45 18.5 6 18.5C6.55 18.5 7 18.05 7 17.5C7 16.95 6.55 16.5 6 16.5Z"/>' +
                       '</svg>',
@@ -225,8 +502,8 @@
             });
 
             Lampa.SettingsApi.addParam({
-                component: PLUGIN_ID,
-                param: { name: PLUGIN_ID + '_primary', type: 'button', default: '' },
+                component: TS_PLUGIN_ID,
+                param: { name: TS_PLUGIN_ID + '_primary', type: 'button', default: '' },
                 field: {
                     name: 'Основной сервер',
                     description: getPrimary() ? shortAddr(getPrimary()) : 'не выбран — нажмите, чтобы выбрать'
@@ -237,28 +514,14 @@
             });
 
             Lampa.SettingsApi.addParam({
-                component: PLUGIN_ID,
-                param: { name: PLUGIN_ID + '_backup', type: 'button', default: '' },
+                component: TS_PLUGIN_ID,
+                param: { name: TS_PLUGIN_ID + '_backup', type: 'button', default: '' },
                 field: {
                     name: 'Резервный сервер',
-                    description: getBackup()
-                        ? shortAddr(getBackup()) + ' (авто-переключение при сбое основного)'
-                        : 'не выбран — нажмите, чтобы выбрать'
+                    description: getBackup() ? shortAddr(getBackup()) + ' (авто-переключение)' : 'не выбран — нажмите, чтобы выбрать'
                 },
                 onRender: function (item) {
                     item.on('hover:enter', function () { pickServer('backup'); });
-                }
-            });
-
-            Lampa.SettingsApi.addParam({
-                component: PLUGIN_ID,
-                param: { name: PLUGIN_ID + '_recheck', type: 'button', default: '' },
-                field: {
-                    name: 'Проверить все сервера сейчас',
-                    description: 'Обновить статус (зелёный/красный) списка адресов'
-                },
-                onRender: function (item) {
-                    item.on('hover:enter', function () { pickServer('primary'); });
                 }
             });
         } catch (e) {
@@ -266,17 +529,14 @@
         }
     }
 
-    // ================================================================
-    //  ПУНКТ ГЛАВНОГО МЕНЮ (страховочный доступ к тому же списку)
-    // ================================================================
-    function addMenuItem() {
-        if ($('.menu__item[data-action="' + PLUGIN_ID + '"]').length) return;
+    function addTSMenuItem() {
+        if ($('.menu__item[data-action="' + TS_PLUGIN_ID + '"]').length) return;
 
         var item = $(
-            '<li class="menu__item selector" data-action="' + PLUGIN_ID + '">' +
+            '<li class="menu__item selector" data-action="' + TS_PLUGIN_ID + '">' +
                 '<div class="menu__ico">' +
                     '<svg height="36" viewBox="0 0 24 24" width="36" fill="currentColor">' +
-                        '<path d="M4 3H20C21.1 3 22 3.9 22 5V9C22 10.1 21.1 11 20 11H4C2.9 11 2 10.1 2 9V5C2 3.9 2.9 3 4 3ZM4 13H20C21.1 13 22 13.9 22 15V19C22 20.1 21.1 21 20 21H4C2.9 21 2 20.1 2 19V15C2 13.9 2.9 13 4 13ZM6 6.5C5.45 6.5 5 6.95 5 7.5C5 8.05 5.45 8.5 6 8.5C6.55 8.5 7 8.05 7 7.5C7 6.95 6.55 6.5 6 6.5ZM6 16.5C5.45 16.5 5 16.95 5 17.5C5 18.05 5.45 18.5 6 18.5C6.55 18.5 7 18.05 7 17.5C7 16.95 6.55 16.5 6 16.5Z"/>' +
+                        '<path d="M4 3H20C21.1 3 22 3.9 22 5V9C22 10.1 21.1 11 20 11H4C2.9 11 2 10.1 2 9V5C2 3.9 2.9 3 4 3ZM4 13H20C21.1 13 22 13.9 22 15V19C22 20.1 21.1 21 20 21H4C2.9 21 2 20.1 2 19V15C2 13.9 2.9 13 4 13Z"/>' +
                     '</svg>' +
                 '</div>' +
                 '<div class="menu__text">TorrServer</div>' +
@@ -292,19 +552,25 @@
     }
 
     // ================================================================
-    //  INIT
+    //  INIT COMBINED
     // ================================================================
     function init() {
+        if (window.v10_combined_ready) return;
+        window.v10_combined_ready = true;
+
+        Lampa.Api.sources[SOURCE_NAME] = new RutorApiService();
+
         addSettings();
-        setTimeout(addMenuItem, 1500);
 
         Lampa.Listener.follow('app', function (e) {
             if (e.type === 'ready' || e.type === 'render') {
                 setTimeout(addMenuItem, 1000);
+                setTimeout(addTSMenuItem, 1200);
             }
         });
+        setTimeout(addMenuItem, 2000);
+        setTimeout(addTSMenuItem, 2200);
 
-        // Первая фоновая проверка — через минуту после старта, затем по таймеру
         setTimeout(autoFailoverCheck, 60000);
         setInterval(autoFailoverCheck, AUTO_CHECK_INTERVAL);
     }
