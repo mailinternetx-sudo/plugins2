@@ -1,5 +1,5 @@
 /**
- * Lampa plugin.js (V10) — v4 "all-in-one" (улучшенная версия)
+ * Lampa plugin.js (V10) — v4 "all-in-one"
  *
  * Состав:
  *  1) Источник каталога V10 (rutor-воркер) — категории, пагинация,
@@ -18,7 +18,7 @@
     if (window.v10_all_in_one_ready) return;
     window.v10_all_in_one_ready = true;
 
-    var SOURCE_NAME = 'V10';
+    var SOURCE_NAME = 'V10_21';
     var WORKER_URL  = 'https://my-proxy-worker.mail-internetx.workers.dev/';
 
     var TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
@@ -39,23 +39,14 @@
     ];
 
     function noty(text) {
-        try { 
-            if (window.Lampa && window.Lampa.Noty) {
-                Lampa.Noty.show(text);
-            } else {
-                console.log('[V10] ' + text);
-            }
-        } catch (e) { 
-            console.log('[V10] ' + text);
-        }
+        try { Lampa.Noty.show(text); } catch (e) { console.log('[V10] ' + text); }
     }
 
     // ================================================================
     //  УТИЛИТЫ ДЛЯ ПОСТЕРОВ
     // ================================================================
     function buildImg(item) {
-        if (!item) return '';
-        if (item.img && typeof item.img === 'string' && item.img.indexOf('http') === 0) return item.img;
+        if (item.img && item.img.indexOf('http') === 0) return item.img;
         if (item.poster_path) {
             if (item.poster_path.indexOf('http') === 0) return item.poster_path;
             if (item.poster_path.indexOf('/t/p/') === 0) return 'https://image.tmdb.org' + item.poster_path;
@@ -65,8 +56,7 @@
     }
 
     function buildBg(item) {
-        if (!item) return '';
-        if (item.background_image && typeof item.background_image === 'string' && item.background_image.indexOf('http') === 0) return item.background_image;
+        if (item.background_image && item.background_image.indexOf('http') === 0) return item.background_image;
         if (item.backdrop_path) {
             if (item.backdrop_path.indexOf('http') === 0) return item.backdrop_path;
             if (item.backdrop_path.indexOf('/t/p/') === 0) return 'https://image.tmdb.org' + item.backdrop_path;
@@ -90,8 +80,6 @@
     //  NORMALIZE
     // ================================================================
     function normalizeCard(item) {
-        if (!item) return null;
-        
         var img = buildImg(item);
         var bg  = buildBg(item);
 
@@ -127,7 +115,11 @@
             release_quality: item.release_quality || '',
             source: SOURCE_NAME,
             promo_title: item.promo_title || title,
-            promo: item.promo || item.overview || ''
+            promo: item.promo || item.overview || '',
+            genres: item.genres_list || item.genres || [],
+            vote_count: item.vote_count_kp || item.vote_count_imdb || item.vote_count || 0,
+            episodes_total: item.episodes_total || undefined,
+            status: item.status || ''
         };
     }
 
@@ -141,15 +133,13 @@
         var clientSeen = {};
 
         function seenKey(card) {
-            if (!card) return '';
-            var id = (card && card.id) ? String(card.id) : '';
+            var id = card && card.id ? String(card.id) : '';
             var t  = ((card && (card.title || card.name)) || '').toLowerCase()
                         .replace(/[^\u0400-\u04ffa-z0-9]/gi, '').slice(0, 80);
             return id + '|' + t;
         }
 
         function dedupClient(catUrl, cards, resetPage) {
-            if (!cards || !Array.isArray(cards)) return [];
             if (resetPage || !clientSeen[catUrl]) clientSeen[catUrl] = {};
             var bag = clientSeen[catUrl];
             var out = [];
@@ -163,9 +153,8 @@
         }
 
         function forceCardType(meta, cards) {
-            if (!meta || meta.method !== 'tv' || !Array.isArray(cards)) return cards || [];
+            if (!meta || meta.method !== 'tv') return cards;
             return cards.map(function (card) {
-                if (!card) return card;
                 card.type   = 'tv';
                 card.method = 'tv';
                 if (!card.first_air_date && card.release_date) card.first_air_date = card.release_date;
@@ -182,12 +171,11 @@
                         onComplete({ results: [], total_pages: 1, page: 1, total_results: 0 });
                         return;
                     }
-                    var normalized = json.results.map(normalizeCard).filter(function(item) { return item !== null; });
                     onComplete({
-                        results: normalized,
+                        results: json.results.map(normalizeCard),
                         page: json.page || 1,
                         total_pages: json.total_pages || 1,
-                        total_results: json.total_results || normalized.length
+                        total_results: json.total_results || json.results.length
                     });
                 },
                 function (err) {
@@ -200,16 +188,15 @@
 
         // ---------------- SEARCH ----------------
         self.search = function (params, onComplete) {
-            var query = (params && params.query) ? (params.query || '').trim() : '';
+            var query = (params.query || '').trim();
             if (!query) { onComplete({ results: [] }); return; }
             var url = WORKER_URL + 'search?query=' + encodeURIComponent(query);
             self.network.silent(
                 url,
                 function (json) {
                     if (!json || !json.results) { onComplete({ results: [] }); return; }
-                    var normalized = json.results.map(normalizeCard).filter(function(item) { return item !== null; });
                     onComplete({
-                        results: normalized,
+                        results: json.results.map(normalizeCard),
                         page: json.page || 1,
                         total_pages: json.total_pages || 1
                     });
@@ -258,7 +245,6 @@
 
         // ---------------- LIST ----------------
         self.list = function (params, onComplete) {
-            if (!params) params = {};
             var page   = params.page || 1;
             var catUrl = params.url  || 'top24';
 
@@ -288,7 +274,6 @@
 
         // ---------------- FULL ----------------
         self.full = function (params, onSuccess) {
-            if (!params) params = {};
             var card   = params.card || params;
             var method = card.method || card.type || detectMediaMethod(card);
 
@@ -304,66 +289,54 @@
 
             function fallbackFull(data) {
                 data = data || {};
-                if (!data.title) data.title = (card && (card.title || card.name)) || '';
+                if (!data.title) data.title = card.title || card.name || '';
                 if (!data.img && savedImg) data.img = savedImg;
                 if (!data.background_image && savedBg)     data.background_image = savedBg;
                 if (!data.release_quality && savedQuality) data.release_quality  = savedQuality;
                 data.type   = method;
                 data.method = method;
-                if (card) {
-                    for (var k in card) {
-                        if (card.hasOwnProperty(k) && data[k] === undefined) data[k] = card[k];
-                    }
+                for (var k in card) {
+                    if (card.hasOwnProperty(k) && data[k] === undefined) data[k] = card[k];
                 }
                 onSuccess(data);
             }
 
-            if (!card || !card.id || card.id <= 0 || String(card.id).length < 3) {
+            if (!card.id || card.id <= 0 || String(card.id).length < 3) {
                 fallbackFull({});
                 return;
             }
 
-            try {
-                if (window.Lampa && window.Lampa.Api && window.Lampa.Api.sources && window.Lampa.Api.sources.tmdb) {
-                    Lampa.Api.sources.tmdb.full(
-                        params,
-                        function (data) {
-                            if (!data || !data.title) fallbackFull(data);
-                            else {
-                                if (!data.img && savedImg) data.img = savedImg;
-                                if (!data.background_image && savedBg)     data.background_image = savedBg;
-                                if (!data.release_quality && savedQuality) data.release_quality  = savedQuality;
-                                data.type   = method;
-                                data.method = method;
-                                onSuccess(data);
-                            }
-                        },
-                        function () { fallbackFull({}); }
-                    );
-                } else {
-                    fallbackFull({});
-                }
-            } catch (e) {
-                console.warn('[V10] full() error:', e);
-                fallbackFull({});
-            }
+            Lampa.Api.sources.tmdb.full(
+                params,
+                function (data) {
+                    if (!data || !data.title) fallbackFull(data);
+                    else {
+                        if (!data.img && savedImg) data.img = savedImg;
+                        if (!data.background_image && savedBg)     data.background_image = savedBg;
+                        if (!data.release_quality && savedQuality) data.release_quality  = savedQuality;
+                        data.type   = method;
+                        data.method = method;
+                        onSuccess(data);
+                    }
+                },
+                function () { fallbackFull({}); }
+            );
         };
     }
-
+        // ================================================================
     // ================================================================
-    // ================================================================
-    //  МОДУЛЬ 2. TORRSERVER SWITCHER
+    //  МОДУЛЬ 2. TORRSERVER SWITCHER  (исправлен: проверка через /echo)
     // ================================================================
     // ================================================================
     var TS = (function () {
         var COMPONENT = 'torrserver_switcher';
 
         var SERVERS = [
-            '85.113.39.177:8090',
+            '178.150.255.251:8090',
             '109.237.108.184:8090',
             '95.174.115.119:8888',
             '91.201.54.146:8090',
-            '45.144.53.25:37940',
+            '85.113.39.177:8090',
             '95.67.104.126:43871',
             '178.141.254.11:8090',
             '212.92.250.83:8090',
@@ -387,46 +360,93 @@
             return (url || '').replace(/^https?:\/\//i, '').replace(/\/+$/, '');
         }
 
+        function nowMs() {
+            return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+        }
+
+        // Проверка через /echo — стандартный health-endpoint TorrServer
         function checkServer(url, cb) {
-            var full = normalizeUrl(url);
-            if (!full) { cb(false); return; }
-            
+            var full = normalizeUrl(url) + '/echo';
             var done = false;
             var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
 
             var timer = setTimeout(function () {
                 if (done) return;
                 done = true;
-                if (controller) { 
-                    try { controller.abort(); } catch (e) {} 
-                }
+                if (controller) { try { controller.abort(); } catch (e) {} }
                 cb(false);
             }, CHECK_TIMEOUT);
 
             try {
-                fetch(full + '/', {
-                    method: 'HEAD',
-                    mode: 'no-cors',
+                fetch(full, {
+                    method: 'GET',
                     cache: 'no-store',
                     signal: controller ? controller.signal : undefined
-                }).then(function () {
+                }).then(function (res) {
                     if (done) return;
                     done = true;
                     clearTimeout(timer);
-                    cb(true);
-                }).catch(function (err) {
+                    // /echo отдаёт текст версии (MatriX.xxx) → 200 = живой
+                    cb(res && (res.ok || res.status === 200));
+                })['catch'](function () {
                     if (done) return;
                     done = true;
                     clearTimeout(timer);
                     cb(false);
                 });
             } catch (e) {
-                if (!done) { 
-                    done = true; 
-                    clearTimeout(timer); 
-                    cb(false); 
-                }
+                if (!done) { done = true; clearTimeout(timer); cb(false); }
             }
+        }
+
+        // Измерение отклика через /echo
+        function measureSpeed(rawUrl, cb) {
+            var full = normalizeUrl(rawUrl) + '/echo';
+            var start = nowMs();
+            var done = false;
+            var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+
+            function finish(result) {
+                if (done) return;
+                done = true;
+                clearTimeout(timer);
+                cb(result);
+            }
+
+            var timer = setTimeout(function () {
+                if (done) return;
+                if (controller) { try { controller.abort(); } catch (e) {} }
+                finish({ ok: false, ms: 0, kbps: 0 });
+            }, CHECK_TIMEOUT);
+
+            try {
+                fetch(full, {
+                    method: 'GET',
+                    cache: 'no-store',
+                    signal: controller ? controller.signal : undefined
+                }).then(function (res) {
+                    return res.text().then(function (text) {
+                        var elapsed = nowMs() - start;
+                        var ok = res && (res.ok || res.status === 200) && text && text.length > 0;
+                        // /echo обычно маленький, скорость в КБ/с почти не информативна —
+                        // показываем время отклика
+                        finish({ ok: !!ok, ms: Math.round(elapsed), kbps: 0 });
+                    });
+                })['catch'](function () {
+                    finish({ ok: false, ms: 0, kbps: 0 });
+                });
+            } catch (e) {
+                finish({ ok: false, ms: 0, kbps: 0 });
+            }
+        }
+
+        function formatSpeed(kbps, ms) {
+            if (kbps > 0) {
+                if (kbps >= 1024) return (kbps / 1024).toFixed(1) + ' МБ/с';
+                return Math.round(kbps) + ' КБ/с';
+            }
+            if (ms > 0) return '~' + ms + ' мс';
+            return '';
         }
 
         function checkAll(onDone) {
@@ -436,38 +456,24 @@
 
             SERVERS.forEach(function (addr, idx) {
                 var url = normalizeUrl(addr);
-                checkServer(url, function (ok) {
-                    results[idx] = { addr: addr, url: url, ok: ok };
+                measureSpeed(addr, function (res) {
+                    results[idx] = { addr: addr, url: url, ok: res.ok, ms: res.ms, kbps: res.kbps };
                     left--;
                     if (left === 0) onDone(results);
                 });
             });
         }
 
-        function getPrimary() { 
-            try { return Lampa.Storage.get(STORAGE_PRIMARY, ''); } 
-            catch (e) { return ''; }
-        }
-        function getBackup()  { 
-            try { return Lampa.Storage.get(STORAGE_BACKUP, ''); }
-            catch (e) { return ''; }
-        }
+        function getPrimary() { return Lampa.Storage.get(STORAGE_PRIMARY, ''); }
+        function getBackup()  { return Lampa.Storage.get(STORAGE_BACKUP, ''); }
 
         function setPrimary(url, silent) {
-            try {
-                Lampa.Storage.set(STORAGE_PRIMARY, url);
-                if (!silent) noty('Основной сервер TorrServer: ' + shortAddr(url));
-            } catch (e) {
-                console.warn('[TS] setPrimary error:', e);
-            }
+            Lampa.Storage.set(STORAGE_PRIMARY, url);
+            if (!silent) noty('Основной сервер TorrServer: ' + shortAddr(url));
         }
         function setBackup(url, silent) {
-            try {
-                Lampa.Storage.set(STORAGE_BACKUP, url);
-                if (!silent) noty('Резервный сервер TorrServer: ' + shortAddr(url));
-            } catch (e) {
-                console.warn('[TS] setBackup error:', e);
-            }
+            Lampa.Storage.set(STORAGE_BACKUP, url);
+            if (!silent) noty('Резервный сервер TorrServer: ' + shortAddr(url));
         }
 
         function pickServer(mode) {
@@ -476,34 +482,38 @@
             checkAll(function (results) {
                 var currentUrl = mode === 'primary' ? getPrimary() : getBackup();
 
-                var items = results.map(function (r) {
-                    var dot  = r.ok ? '🟢' : '🔴';
-                    var mark = (currentUrl && currentUrl.replace(/\/+$/, '') === r.url) ? ' ✓' : '';
+                var sorted = results.slice().sort(function (a, b) {
+                    if (a.ok !== b.ok) return a.ok ? -1 : 1;
+                    if (a.kbps !== b.kbps) return b.kbps - a.kbps;
+                    return (a.ms || 9e9) - (b.ms || 9e9);
+                });
+
+                var items = sorted.map(function (r) {
+                    var dot   = r.ok ? '🟢' : '🔴';
+                    var mark  = (currentUrl && currentUrl.replace(/\/+$/, '') === r.url) ? ' ✓' : '';
+                    var speed = r.ok ? formatSpeed(r.kbps, r.ms) : '';
+                    var speedLabel = speed ? ' (' + speed + ')' : '';
                     return {
-                        title: dot + ' ' + r.addr + mark,
+                        title: dot + ' ' + r.addr + speedLabel + mark,
                         subtitle: r.ok ? 'работает' : 'не отвечает',
                         url: r.url,
                         ok: r.ok
                     };
                 });
 
-                try {
-                    Lampa.Select.show({
-                        title: mode === 'primary' ? 'TorrServer — основной адрес' : 'TorrServer — резервный адрес',
-                        items: items,
-                        onSelect: function (item) {
-                            if (!item.ok) noty('⚠ Этот сервер сейчас не отвечает. Выбран, но лучше выбрать зелёный.');
-                            if (mode === 'primary') setPrimary(item.url);
-                            else setBackup(item.url);
-                        },
-                        onBack: function () {
-                            try { Lampa.Controller.toggle('settings_component'); }
-                            catch (e) { try { Lampa.Controller.toggle('menu'); } catch (e2) {} }
-                        }
-                    });
-                } catch (e) {
-                    console.warn('[TS] Lampa.Select error:', e);
-                }
+                Lampa.Select.show({
+                    title: mode === 'primary' ? 'TorrServer — основной адрес' : 'TorrServer — резервный адрес',
+                    items: items,
+                    onSelect: function (item) {
+                        if (!item.ok) noty('⚠ Этот сервер сейчас не отвечает. Выбран, но лучше выбрать зелёный.');
+                        if (mode === 'primary') setPrimary(item.url);
+                        else setBackup(item.url);
+                    },
+                    onBack: function () {
+                        try { Lampa.Controller.toggle('settings_component'); }
+                        catch (e) { try { Lampa.Controller.toggle('menu'); } catch (e2) {} }
+                    }
+                });
             });
         }
 
@@ -526,7 +536,9 @@
             try {
                 Lampa.SettingsApi.addComponent({
                     component: COMPONENT,
-                    icon: '<svg height="60" viewBox="0 0 24 24" width="60" fill="currentColor"><path d="M4 3H20C21.1 3 22 3.9 22 5V9C22 10.1 21.1 11 20 11H4C2.9 11 2 10.1 2 9V5C2 3.9 2.9 3 4 3ZM4 13H20C21.1 13 22 13.9 22 15V19C22 20.1 21.1 21 20 21H4C2.9 21 2 20.1 2 19V15C2 13.9 2.9 13 4 13Z"/></svg>',
+                    icon: '<svg height="60" viewBox="0 0 24 24" width="60" fill="currentColor">' +
+                              '<path d="M4 3H20C21.1 3 22 3.9 22 5V9C22 10.1 21.1 11 20 11H4C2.9 11 2 10.1 2 9V5C2 3.9 2.9 3 4 3ZM4 13H20C21.1 13 22 13.9 22 15V19C22 20.1 21.1 21 20 21H4C2.9 21 2 20.1 2 19V15C2 13.9 2.9 13 4 13ZM6 6.5C5.45 6.5 5 6.95 5 7.5C5 8.05 5.45 8.5 6 8.5C6.55 8.5 7 8.05 7 7.5C7 6.95 6.55 6.5 6 6.5ZM6 16.5C5.45 16.5 5 16.95 5 17.5C5 18.05 5.45 18.5 6 18.5C6.55 18.5 7 18.05 7 17.5C7 16.95 6.55 16.5 6 16.5Z"/>' +
+                          '</svg>',
                     name: 'TorrServer'
                 });
 
@@ -578,10 +590,9 @@
 
         return { init: init, pick: pickServer };
     })();
-
+        // ================================================================
     // ================================================================
-    // ================================================================
-    //  МОДУЛЬ 3. КАТАЛОГ ПАРСЕРОВ (по мотивам LME PubTorr)
+    //  МОДУЛЬ 3. КАТАЛОГ ПАРСЕРОВ (health-check исправлен)
     // ================================================================
     // ================================================================
     var PARSERS = (function () {
@@ -598,20 +609,15 @@
             { id: 'jacred_my_to',        name: 'Jacred.my.to', settings: { url: 'jacred.my.to',         key: '',        parser_torrent_type: 'jackett' } },
             { id: 'jacred',              name: 'Jac.red',      settings: { url: 'jac.red',              key: '',        parser_torrent_type: 'jackett' } },
             { id: 'jacred_su',           name: 'JacRed.su',    settings: { url: 'jacred.su',            key: '',        parser_torrent_type: 'jackett' } },
-            { id: 'jac_red_ru',          name: 'jac-red.ru',   settings: { url: 'jac-red.ru',           key: '',        parser_torrent_type: 'jackett' } },
-            { id: 'jacred_ru',           name: 'Jacred.ru',    settings: { url: 'jacred.ru',            key: '',        parser_torrent_type: 'jackett' } },
-            { id: 'jacred_xyz',          name: 'Jacred.xyz',   settings: { url: 'jacred.xyz',           key: '',        parser_torrent_type: 'jackett' } }
+            { id: 'jac_red_ru',          name: 'jac-red.ru',   settings: { url: 'jac-red.ru',           key: '',        parser_torrent_type: 'jackett' } }
         ];
 
-        // кэш проверок на 10 минут
         var cache = {};
         var TTL = 10 * 60 * 1000;
 
         function protocol() {
-            if (typeof window !== 'undefined' && window.Lampa && window.Lampa.Utils && typeof window.Lampa.Utils.protocol === 'function') {
-                return window.Lampa.Utils.protocol();
-            }
-            return (typeof location !== 'undefined' && location.protocol === 'https:') ? 'https://' : 'http://';
+            if (Lampa.Utils && typeof Lampa.Utils.protocol === 'function') return Lampa.Utils.protocol();
+            return location.protocol === 'https:' ? 'https://' : 'http://';
         }
 
         function healthUrl(parser) {
@@ -619,7 +625,11 @@
             var s    = parser.settings;
             var type = s.parser_torrent_type || 'jackett';
             var pre  = /^https?:\/\//.test(s.url) ? '' : protocol();
-            var base = type === 'prowlarr' ? '/api/v1/health' : '/api/v2.0/indexers/status:healthy/results';
+            // Jackett: /api/v2.0/indexers/status:healthy/results/torznab
+            // Prowlarr: /api/v1/health
+            var base = type === 'prowlarr'
+                ? '/api/v1/health'
+                : '/api/v2.0/indexers/status:healthy/results/torznab';
             return pre + s.url + base + '?apikey=' + (s.key || '');
         }
 
@@ -629,35 +639,26 @@
             return found;
         }
 
-        function getSelectedId() { 
-            try { return Lampa.Storage.get(STORAGE_KEY, NO_PARSER); }
-            catch (e) { return NO_PARSER; }
-        }
+        function getSelectedId() { return Lampa.Storage.get(STORAGE_KEY, NO_PARSER); }
 
         function currentName() {
             var p = getById(getSelectedId());
             return p ? p.name : 'Не выбран';
         }
 
-        // Применяет выбранный парсер в штатные ключи Lampa
         function applySelected(id) {
             var parserId = id || getSelectedId();
             var parser   = getById(parserId);
             if (!parser || !parser.settings) return false;
 
-            try {
-                var s    = parser.settings;
-                var type = s.parser_torrent_type || 'jackett';
+            var s    = parser.settings;
+            var type = s.parser_torrent_type || 'jackett';
 
-                Lampa.Storage.set(type === 'prowlarr' ? 'prowlarr_url' : 'jackett_url', s.url);
-                Lampa.Storage.set(type === 'prowlarr' ? 'prowlarr_key' : 'jackett_key', s.key || '');
-                Lampa.Storage.set('parser_torrent_type', type);
-                Lampa.Storage.set('parser_use', true);
-                return true;
-            } catch (e) {
-                console.warn('[PARSERS] applySelected error:', e);
-                return false;
-            }
+            Lampa.Storage.set(type === 'prowlarr' ? 'prowlarr_url' : 'jackett_url', s.url);
+            Lampa.Storage.set(type === 'prowlarr' ? 'prowlarr_key' : 'jackett_key', s.key || '');
+            Lampa.Storage.set('parser_torrent_type', type);
+            Lampa.Storage.set('parser_use', true);
+            return true;
         }
 
         function checkOne(parser, cb) {
@@ -668,23 +669,23 @@
             var c   = cache[key];
             if (c && Date.now() < c.expires) { cb(c.status); return; }
 
-            try {
-                fetch(url, {
-                    method: 'GET',
-                    timeout: CHECK_TIMEOUT
-                }).then(function (response) {
-                    var st = response.status === 200 ? 'ok' 
-                           : response.status === 401 ? 'auth' 
-                           : 'network';
+            $.ajax({
+                url: url,
+                method: 'GET',
+                timeout: CHECK_TIMEOUT,
+                success: function (resp, textStatus, xhr) {
+                    var st = (xhr && xhr.status === 200) ? 'ok'
+                           : (xhr && xhr.status === 401) ? 'auth' : 'network';
                     cache[key] = { status: st, expires: Date.now() + TTL };
                     cb(st);
-                }).catch(function (err) {
-                    cache[key] = { status: 'network', expires: Date.now() + TTL };
-                    cb('network');
-                });
-            } catch (e) {
-                cb('network');
-            }
+                },
+                error: function (xhr) {
+                    var st = (xhr && xhr.status === 200) ? 'ok'
+                           : (xhr && xhr.status === 401) ? 'auth' : 'network';
+                    if (st !== 'network') cache[key] = { status: st, expires: Date.now() + TTL };
+                    cb(st);
+                }
+            });
         }
 
         function checkAll(cb) {
@@ -730,36 +731,28 @@
                 items.push({ title: '⚪ Не использовать парсер', subtitle: 'Отключить парсер', parser: null });
                 items.push({ title: '↻ Обновить проверку', subtitle: 'Сбросить кэш и проверить заново', refresh: true });
 
-                try {
-                    Lampa.Select.show({
-                        title: 'Каталог парсеров',
-                        items: items,
-                        onSelect: function (item) {
-                            if (item.refresh) { openCatalog(true); return; }
+                Lampa.Select.show({
+                    title: 'Каталог парсеров',
+                    items: items,
+                    onSelect: function (item) {
+                        if (item.refresh) { openCatalog(true); return; }
 
-                            if (!item.parser) {
-                                try {
-                                    Lampa.Storage.set(STORAGE_KEY, NO_PARSER);
-                                    Lampa.Storage.set('parser_use', false);
-                                } catch (e) {}
-                                noty('Парсер отключён');
-                                return;
-                            }
-
-                            try {
-                                Lampa.Storage.set(STORAGE_KEY, item.parser.id);
-                                applySelected(item.parser.id);
-                            } catch (e) {}
-                            noty('Парсер выбран: ' + item.parser.name);
-                        },
-                        onBack: function () {
-                            try { Lampa.Controller.toggle('settings_component'); }
-                            catch (e) { try { Lampa.Controller.toggle('menu'); } catch (e2) {} }
+                        if (!item.parser) {
+                            Lampa.Storage.set(STORAGE_KEY, NO_PARSER);
+                            Lampa.Storage.set('parser_use', false);
+                            noty('Парсер отключён');
+                            return;
                         }
-                    });
-                } catch (e) {
-                    console.warn('[PARSERS] Lampa.Select error:', e);
-                }
+
+                        Lampa.Storage.set(STORAGE_KEY, item.parser.id);
+                        applySelected(item.parser.id);
+                        noty('Парсер выбран: ' + item.parser.name);
+                    },
+                    onBack: function () {
+                        try { Lampa.Controller.toggle('settings_component'); }
+                        catch (e) { try { Lampa.Controller.toggle('menu'); } catch (e2) {} }
+                    }
+                });
             });
         }
 
@@ -767,7 +760,9 @@
             try {
                 Lampa.SettingsApi.addComponent({
                     component: COMPONENT,
-                    icon: '<svg height="60" viewBox="0 0 24 24" width="60" fill="currentColor"><path d="M12 2L2 7L12 12L22 7L12 2ZM2 12L12 17L22 12M2 17L12 22L22 17"/></svg>',
+                    icon: '<svg height="60" viewBox="0 0 24 24" width="60" fill="currentColor">' +
+                              '<path d="M12 2L2 7L12 12L22 7L12 2ZM2 12L12 17L22 12M2 17L12 22L22 17"/>' +
+                          '</svg>',
                     name: 'Каталог парсеров'
                 });
 
@@ -801,7 +796,6 @@
 
         function init() {
             addSettings();
-            // При старте восстанавливаем ранее выбранный парсер в ключи Lampa
             if (getSelectedId() !== NO_PARSER) applySelected();
         }
 
@@ -812,75 +806,57 @@
     //  МЕНЮ
     // ================================================================
     function addMenuItem(action, text, svg, onEnter) {
-        try {
-            var selector = '.menu__item[data-action="' + action + '"]';
-            var $existing = document.querySelectorAll(selector);
-            if ($existing && $existing.length) return;
+        if ($('.menu__item[data-action="' + action + '"]').length) return;
 
-            var item = document.createElement('li');
-            item.className = 'menu__item selector';
-            item.setAttribute('data-action', action);
-            
-            var ico = document.createElement('div');
-            ico.className = 'menu__ico';
-            ico.innerHTML = svg;
-            
-            var txt = document.createElement('div');
-            txt.className = 'menu__text';
-            txt.textContent = text;
-            
-            item.appendChild(ico);
-            item.appendChild(txt);
+        var item = $(
+            '<li class="menu__item selector" data-action="' + action + '">' +
+                '<div class="menu__ico">' + svg + '</div>' +
+                '<div class="menu__text">' + text + '</div>' +
+            '</li>'
+        );
 
-            if (typeof onEnter === 'function') {
-                item.addEventListener('click', onEnter);
-            }
+        item.on('hover:enter', onEnter);
 
-            var menuList = document.querySelector('.menu__list');
-            var $after = document.querySelector('.menu__list [data-action="movie"], .menu__list [data-action="tv"]');
-            
-            if (menuList) {
-                if ($after && $after.parentNode) {
-                    $after.parentNode.parentNode.insertBefore(item, $after.parentNode.nextSibling);
-                } else {
-                    menuList.appendChild(item);
-                }
-            }
-        } catch (e) {
-            console.warn('[V10] addMenuItem error:', e);
-        }
+        var $after = $('.menu__list [data-action="movie"], .menu__list [data-action="tv"]').first().parent();
+        if ($after.length) $after.after(item);
+        else               $('.menu__list').append(item);
     }
 
     function addAllMenuItems() {
         addMenuItem(
             'v10',
             SOURCE_NAME,
-            '<svg height="36" viewBox="0 0 24 24" width="36" fill="currentColor"><path d="M12 2L2 8V20H8V14H16V20H22V8L12 2ZM4 10L12 6L20 10V18H17V12H7V18H4V10Z"/><path d="M9 13H15V15H9V13Z"/></svg>',
+            '<svg height="36" viewBox="0 0 24 24" width="36" fill="currentColor">' +
+                '<path d="M12 2L2 8V20H8V14H16V20H22V8L12 2ZM4 10L12 6L20 10V18H17V12H7V18H4V10Z"/>' +
+                '<path d="M9 13H15V15H9V13Z"/>' +
+            '</svg>',
             function () {
-                try {
-                    Lampa.Activity.push({
-                        title: SOURCE_NAME,
-                        component: 'category',
-                        source: SOURCE_NAME,
-                        method: 'category'
-                    });
-                } catch (e) {
-                    console.warn('[V10] Activity.push error:', e);
-                }
+                Lampa.Activity.push({
+                    title: SOURCE_NAME,
+                    component: 'category',
+                    source: SOURCE_NAME,
+                    method: 'category'
+                });
             }
         );
 
         addMenuItem(
             'torrserver_switcher',
             'TorrServer',
-            '<svg height="36" viewBox="0 0 24 24" width="36" fill="currentColor"><path d="M4 3H20C21.1 3 22 3.9 22 5V9C22 10.1 21.1 11 20 11H4C2.9 11 2 10.1 2 9V5C2 3.9 2.9 3 4 3ZM4 13H20C21.1 13 22 13.9 22 15V19C22 20.1 21.1 21 20 21H4C2.9 21 2 20.1 2 19V15C2 13.9 2.9 13 4 13Z"/></svg>',
+            '<svg height="36" viewBox="0 0 24 24" width="36" fill="currentColor">' +
+                '<path d="M4 3H20C21.1 3 22 3.9 22 5V9C22 10.1 21.1 11 20 11H4C2.9 11 2 10.1 2 9V5C2 3.9 2.9 3 4 3ZM4 13H20C21.1 13 22 13.9 22 15V19C22 20.1 21.1 21 20 21H4C2.9 21 2 20.1 2 19V15C2 13.9 2.9 13 4 13ZM6 6.5C5.45 6.5 5 6.95 5 7.5C5 8.05 5.45 8.5 6 8.5C6.55 8.5 7 8.05 7 7.5C7 6.95 6.55 6.5 6 6.5Z"/>' +
+            '</svg>',
             function () { TS.pick('primary'); }
         );
 
         addMenuItem(
             'v10_parsers',
             'Парсеры',
-            '<svg height="36" viewBox="0 0 24 24" width="36" fill="currentColor"><path d="M12 2L2 7L12 12L22 7L12 2Z"/><path d="M2 12L12 17L22 12L20 11L12 15L4 11L2 12Z"/><path d="M2 17L12 22L22 17L20 16L12 20L4 16L2 17Z"/></svg>',
+            '<svg height="36" viewBox="0 0 24 24" width="36" fill="currentColor">' +
+                '<path d="M12 2L2 7L12 12L22 7L12 2Z"/>' +
+                '<path d="M2 12L12 17L22 12L20 11L12 15L4 11L2 12Z"/>' +
+                '<path d="M2 17L12 22L22 17L20 16L12 20L4 16L2 17Z"/>' +
+            '</svg>',
             function () { PARSERS.open(false); }
         );
     }
@@ -889,36 +865,22 @@
     //  INIT
     // ================================================================
     function init() {
-        try {
-            if (!window.Lampa) return;
-            if (!Lampa.Api.sources) Lampa.Api.sources = {};
-            Lampa.Api.sources[SOURCE_NAME] = new RutorApiService();
+        Lampa.Api.sources[SOURCE_NAME] = new RutorApiService();
 
-            TS.init();
-            PARSERS.init();
+        TS.init();
+        PARSERS.init();
 
-            if (Lampa.Listener && typeof Lampa.Listener.follow === 'function') {
-                Lampa.Listener.follow('app', function (e) {
-                    if (e && (e.type === 'ready' || e.type === 'render')) {
-                        setTimeout(addAllMenuItems, 1000);
-                    }
-                });
-            }
-            setTimeout(addAllMenuItems, 2000);
-        } catch (e) {
-            console.warn('[V10] Init error:', e);
-        }
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready' || e.type === 'render') setTimeout(addAllMenuItems, 1000);
+        });
+        setTimeout(addAllMenuItems, 2000);
     }
 
-    try {
-        if (window.appready) {
-            init();
-        } else if (window.Lampa && Lampa.Listener) {
-            Lampa.Listener.follow('app', function (e) {
-                if (e && e.type === 'ready') init();
-            });
-        }
-    } catch (e) {
-        console.warn('[V10] Startup error:', e);
+    if (window.appready) {
+        init();
+    } else {
+        Lampa.Listener.follow('app', function (e) {
+            if (e.type === 'ready') init();
+        });
     }
 })();
