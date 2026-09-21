@@ -1,5 +1,5 @@
 /**
- * Lampa plugin.js (V10) — v5 "all-in-one + Lumio"
+ * Lampa plugin.js (V10) — v5 "all-in-one + Lumio" — БЕЗОПАСНАЯ СБОРКА
  *
  * Состав:
  *  1) Источник каталога V10 (rutor-воркер) — категории, пагинация,
@@ -22,7 +22,7 @@
     if (window.v10_all_in_one_ready) return;
     window.v10_all_in_one_ready = true;
 
-    var SOURCE_NAME = 'V10_2_lumio';
+    var SOURCE_NAME = 'V10_21';
     var WORKER_URL  = 'https://my-proxy-worker.mail-internetx.workers.dev/';
 
     var TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
@@ -34,13 +34,8 @@
     var CONFIG = {
         // Включить модуль онлайн-просмотра Lumio
         lumio: true,
-        // Анонимная статистика Lumio (uid + счётчики) → beta.mitsu.tv.
-        // В исходном plugin2 была включена, здесь по умолчанию ВЫКЛЮЧЕНА.
-        lumioTelemetry: false,
-        // Разрешить серверу RCH (beta.mitsu.tv) выполнять присланный JS через eval().
-        // Нужно некоторым провайдерам Lampac; если не нужно — поставьте false.
-        lumioRemoteEval: false,
-        // Подробный лог в консоль
+        // БЕЗОПАСНАЯ СБОРКА: телеметрия, eval, RCH (websocket + чужой скрипт)
+        // и отправка ключа kit удалены из кода — флагами не включаются.
         debug: false
     };
 
@@ -1083,8 +1078,8 @@ restoreOriginalSubsAutostart();
 
     // One small aggregate only, at most once per ten minutes. It contains no
     // title, URL, IP address, account data, or individual request history.
-    var NEXUS_TELEMETRY_ENABLED = !!CONFIG.lumioTelemetry; // [V10] по умолчанию выключена
-    var NEXUS_TELEMETRY_URL = 'https://beta.mitsu.tv/lumio-telemetry.php';
+    var NEXUS_TELEMETRY_ENABLED = false; // [V10-SAFE] телеметрия удалена
+    var NEXUS_TELEMETRY_URL = ''; // [V10-SAFE]
     var NEXUS_TELEMETRY_INTERVAL = 15 * 60 * 1000;
     var nexusTelemetry = (function () {
         var counters = {};
@@ -1114,7 +1109,7 @@ restoreOriginalSubsAutostart();
         }
 
         function flush(force) {
-            if (!NEXUS_TELEMETRY_ENABLED || !hasData()) return;
+            if (!NEXUS_TELEMETRY_ENABLED || !NEXUS_TELEMETRY_URL || !hasData()) return;
             if (!force && Date.now() - lastSent < NEXUS_TELEMETRY_INTERVAL) {
                 schedule();
                 return;
@@ -1199,10 +1194,7 @@ restoreOriginalSubsAutostart();
         if (uid) url = Lampa.Utils.addUrlComponent(url, 'uid=' + encodeURIComponent(uid));
     }
 
-    if (url.indexOf('nws_id=') === -1) {
-        var nwsid = Lampa.Storage.get('lampac_nws_id', '') || Lampa.Storage.get('lampac_nwsid', '');
-        if (nwsid) url = Lampa.Utils.addUrlComponent(url, 'nws_id=' + encodeURIComponent(nwsid));
-    }
+    // [V10-SAFE] nws_id не отправляется
 
     return url;
 }
@@ -1210,7 +1202,7 @@ restoreOriginalSubsAutostart();
 function addHeaders() {
     var kit_aesgcmkey = Lampa.Storage.get('kit_aesgcmkey', '');
     if (kit_aesgcmkey) {
-        return { 'X-Kit-AesGcm': kit_aesgcmkey };
+        void kit_aesgcmkey; // [V10-SAFE] ключ kit не отправляется
     }
     return {};
 }
@@ -1348,7 +1340,7 @@ function addHeaders() {
         if (url === 'eval') {
             try {
                 // Lampac sends these helpers only through this authenticated RCH socket.
-                nexusRchSendResult(rchId, eval(data));
+                nexusRchSendResult(rchId, ''); // [V10-SAFE] eval удалён
             } catch (e) {
                 nexusRchSendResult(rchId, '');
             }
@@ -1356,7 +1348,7 @@ function addHeaders() {
         }
 
         if (url === 'evalrun') {
-            try { eval(data); } catch (e2) {}
+            // [V10-SAFE] eval удалён
             return;
         }
 
@@ -1420,37 +1412,10 @@ function addHeaders() {
     }
 
     function nexusRchEnsure(success, error) {
-        if (nexusRch.state === 'ready' && nexusRch.client && nexusRch.client.connectionId != null) {
-            success();
-            return;
-        }
-
-        nexusRch.waiters.push({ success: success, error: error });
-
-        if (nexusRch.state === 'connecting' || nexusRch.state === 'registering' || nexusRch.scriptLoading) return;
-
-        nexusRch.state = 'connecting';
-
-        nexusRchResolveType(function () {
-        if (typeof window.NativeWsClient !== 'undefined') {
-            nexusRchConnect();
-            return;
-        }
-
-        nexusRch.scriptLoading = true;
-        var script = document.createElement('script');
-        script.src = NEXUS_HOST + '/js/nws-client-es5.js?v21042026';
-        script.onload = function () {
-            nexusRch.scriptLoading = false;
-            nexusRchConnect();
-        };
-        script.onerror = function () {
-            nexusRch.state = 'failed';
-            nexusRch.scriptLoading = false;
-            nexusRchFinish(false, { msg: 'Не удалось подключиться к RCH' });
-        };
-        document.head.appendChild(script);
-        });
+        // [V10-SAFE] RCH отключён: нет websocket, нет загрузки клиента с beta.mitsu.tv,
+        // сервер не может заставить устройство делать запросы от вашего IP
+        if (error) error({ msg: 'RCH отключён в безопасной сборке' });
+        return;
     }
 
     function nexusRchRequestUrl(url) {
@@ -1739,6 +1704,22 @@ function lumioPrepareMovie(movie) {
     }
 
     return m;
+}
+
+// [V10-SAFE] HTML-ответ источника парсится DOMParser'ом: скрипты не исполняются,
+// картинки/обработчики (onerror и т.п.) не срабатывают
+function lumioInertParse(str) {
+    str = String(str == null ? '' : str);
+    try {
+        var doc = new DOMParser().parseFromString('<div>' + str + '</div>', 'text/html');
+        var bad = doc.querySelectorAll('script,style,iframe,object,embed');
+        for (var i = bad.length - 1; i >= 0; i--) bad[i].parentNode.removeChild(bad[i]);
+        return doc.body;
+    } catch (e) {
+        var d = document.createElement('div');
+        d.textContent = '';
+        return d;
+    }
 }
 
 function readSourcesCache(movie, allowExpired) {
@@ -4764,7 +4745,7 @@ if (object.movie.name && data.season && !data.episode) {
 
             var result = [];
             try {
-                var html = $('<div>' + str + '</div>');
+                var html = $(lumioInertParse(str)); // [V10-SAFE]
                 html.find('[data-json]').each(function () {
                     var el   = $(this);
                     var data = {};
