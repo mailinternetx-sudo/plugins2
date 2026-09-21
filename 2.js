@@ -22,7 +22,7 @@
     if (window.v10_all_in_one_ready) return;
     window.v10_all_in_one_ready = true;
 
-    var SOURCE_NAME = 'V10_21';
+    var SOURCE_NAME = 'V10_2_lumio';
     var WORKER_URL  = 'https://my-proxy-worker.mail-internetx.workers.dev/';
 
     var TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
