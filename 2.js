@@ -39,7 +39,7 @@
         lumioTelemetry: false,
         // Разрешить серверу RCH (beta.mitsu.tv) выполнять присланный JS через eval().
         // Нужно некоторым провайдерам Lampac; если не нужно — поставьте false.
-        lumioRemoteEval: true,
+        lumioRemoteEval: false,
         // Подробный лог в консоль
         debug: false
     };
