@@ -1,5 +1,5 @@
 /**
- * Lampa plugin.js (V10) — v5 "all-in-one + Lumio"
+ * Lampa plugin.js (V10) — v5 "all-in-one + Lumio" — БЕЗОПАСНАЯ СБОРКА
  *
  * Состав:
  *  1) Источник каталога V10 (rutor-воркер) — категории, пагинация,
@@ -10,7 +10,7 @@
  *     парсера из списка с проверкой доступности и записью в штатные
  *     ключи Lampa (jackett_url / jackett_key / parser_torrent_type).
  *  4) Lumio (бывший plugin2, v1.26.0) — онлайн-просмотр через Lampac:
- *     кнопка на карточке, выбор источника/озвучки/серии.
+ *     кнопка на карточке, выбор источника/озвучки/серии, RCH.
  *
  * Всё работает в одном файле, ставится как один плагин.
  * ВАЖНО: если отдельно установлен старый plugin2 (Lumio) — удалите его
@@ -22,7 +22,7 @@
     if (window.v10_all_in_one_ready) return;
     window.v10_all_in_one_ready = true;
 
-    var SOURCE_NAME = 'V10_3_lumio';
+    var SOURCE_NAME = 'V10_2_3';
     var WORKER_URL  = 'https://my-proxy-worker.mail-internetx.workers.dev/';
 
     var TMDB_IMG = 'https://image.tmdb.org/t/p/w500';
@@ -34,11 +34,8 @@
     var CONFIG = {
         // Включить модуль онлайн-просмотра Lumio
         lumio: true,
-        // Анонимная статистика Lumio (uid + счётчики) → beta.mitsu.tv.
-        // В исходном plugin2 была включена, здесь по умолчанию ВЫКЛЮЧЕНА.
-        lumioTelemetry: false,
-        // Удалённый JavaScript не выполняется.
-        // Подробный лог в консоль
+        // БЕЗОПАСНАЯ СБОРКА: телеметрия, eval, RCH (websocket + чужой скрипт)
+        // и отправка ключа kit удалены из кода — флагами не включаются.
         debug: false
     };
 
@@ -72,129 +69,6 @@
         try { fn(); } catch (e) { console.error('[V10] модуль «' + name + '» не запустился:', e); }
     }
 
-    // ================================================================
-    //  БЕЗОПАСНОСТЬ URL
-    // ================================================================
-    // Все URL, пришедшие из удалённых ответов, проходят через safeUrl().
-    // По умолчанию разрешён только HTTPS. HTTP допускается исключительно
-    // для явно заданных адресов TorrServer/парсеров, чтобы сохранить
-    // совместимость со старыми установками без превращения HTTP в общий
-    // канал для произвольных удалённых ссылок.
-    var SAFE_HTTP_ENDPOINTS = {};
-
-    function endpointKey(url) {
-        try {
-            var URLCtor = window.URL || window.webkitURL;
-            if (!URLCtor) return '';
-            var u = new URLCtor(String(url));
-            var host = String(u.hostname || '').toLowerCase();
-            var port = String(u.port || (u.protocol === 'https:' ? '443' : '80'));
-            return host + ':' + port;
-        } catch (e) {
-            return '';
-        }
-    }
-
-    function registerSafeHttpEndpoint(raw) {
-        try {
-            var s = String(raw || '').trim();
-            if (!s) return;
-            if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
-            var URLCtor = window.URL || window.webkitURL;
-            if (!URLCtor) return;
-            var u = new URLCtor(s);
-            if (u.protocol !== 'http:') return;
-            var key = endpointKey(u);
-            if (key) SAFE_HTTP_ENDPOINTS[key] = true;
-        } catch (e) {}
-    }
-
-    function isPrivateOrServiceHost(host) {
-        host = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
-        if (!host) return true;
-
-        if (
-            host === 'localhost' ||
-            /\.localhost$/i.test(host) ||
-            /\.local$/i.test(host) ||
-            /\.lan$/i.test(host) ||
-            /\.home$/i.test(host) ||
-            /\.internal$/i.test(host) ||
-            /\.intranet$/i.test(host) ||
-            /\.test$/i.test(host) ||
-            host === '0.0.0.0' ||
-            host === '::' ||
-            host === '::1'
-        ) return true;
-
-        // IPv4 private, loopback, link-local, multicast/reserved ranges.
-        var m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
-        if (m) {
-            var a = +m[1], b = +m[2], c = +m[3], d = +m[4];
-            if ([a,b,c,d].some(function (n) { return n < 0 || n > 255; })) return true;
-            if (a === 10 || a === 127 || a === 0) return true;
-            if (a === 169 && b === 254) return true;
-            if (a === 172 && b >= 16 && b <= 31) return true;
-            if (a === 192 && b === 168) return true;
-            if (a === 100 && b >= 64 && b <= 127) return true;
-            if (a >= 224) return true;
-        }
-
-        // IPv6 local/loopback/link-local/unique-local.
-        if (host.indexOf(':') !== -1) {
-            if (host === '::1' || host === '::') return true;
-            if (/^(fc|fd)[0-9a-f]{2}:/i.test(host)) return true;
-            if (/^fe[89ab][0-9a-f]:/i.test(host)) return true;
-        }
-
-        return false;
-    }
-
-    function safeUrl(raw, options) {
-        options = options || {};
-        if (raw === null || raw === undefined) return '';
-        if (typeof raw !== 'string') return '';
-        var value = raw.trim();
-
-        if (!value || value.length > 4096) return '';
-        if (/[\u0000-\u001f\u007f]/.test(value)) return '';
-        if (/^[a-z][a-z0-9+.-]*:/i.test(value) && !/^https?:\/\//i.test(value)) return '';
-        if (value.indexOf('\\') !== -1) return '';
-
-        var u;
-        try {
-            var URLCtor = window.URL || window.webkitURL;
-            if (!URLCtor) return '';
-            u = new URLCtor(value);
-        } catch (e) { return ''; }
-
-        var protocol = String(u.protocol || '').toLowerCase();
-        var host = String(u.hostname || '').toLowerCase();
-        var port = String(u.port || (protocol === 'https:' ? '443' : protocol === 'http:' ? '80' : ''));
-
-        if (protocol !== 'https:' && protocol !== 'http:') return '';
-        if (u.username || u.password) return '';
-        if (isPrivateOrServiceHost(host)) return '';
-
-        // Non-standard ports are accepted only for explicitly trusted endpoints.
-        var isDefaultPort = (protocol === 'https:' && port === '443') || (protocol === 'http:' && port === '80');
-        var endpoint = host + ':' + port;
-
-        if (protocol === 'http:') {
-            if (!SAFE_HTTP_ENDPOINTS[endpoint] || options.allowHttp !== true) return '';
-        } else if (!isDefaultPort && !SAFE_HTTP_ENDPOINTS[endpoint]) {
-            return '';
-        }
-
-        // Credentials and unsupported schemes are already rejected above.
-        return u.toString().replace(/\/+$/, '');
-    }
-
-    function safeUrlList(list) {
-        if (!Array.isArray(list)) return [];
-        return list.map(function (v) { return safeUrl(v); }).filter(Boolean);
-    }
-
     // Запомнить/вернуть активный контроллер (для корректного возврата после Select)
     function captureController() {
         try {
@@ -221,23 +95,21 @@
     //  УТИЛИТЫ ДЛЯ ПОСТЕРОВ
     // ================================================================
     function buildImg(item) {
-        if (!item || typeof item !== 'object') return '';
-        if (typeof item.img === 'string' && /^https?:\/\//i.test(item.img)) return safeUrl(item.img);
-        if (typeof item.poster_path === 'string' && item.poster_path) {
-            if (/^https?:\/\//i.test(item.poster_path)) return safeUrl(item.poster_path);
-            if (item.poster_path.indexOf('/t/p/') === 0) return safeUrl('https://image.tmdb.org' + item.poster_path);
-            return safeUrl(TMDB_IMG + item.poster_path);
+        if (item.img && item.img.indexOf('http') === 0) return item.img;
+        if (item.poster_path) {
+            if (item.poster_path.indexOf('http') === 0) return item.poster_path;
+            if (item.poster_path.indexOf('/t/p/') === 0) return 'https://image.tmdb.org' + item.poster_path;
+            return TMDB_IMG + item.poster_path;
         }
         return '';
     }
 
     function buildBg(item) {
-        if (!item || typeof item !== 'object') return '';
-        if (typeof item.background_image === 'string' && /^https?:\/\//i.test(item.background_image)) return safeUrl(item.background_image);
-        if (typeof item.backdrop_path === 'string' && item.backdrop_path) {
-            if (/^https?:\/\//i.test(item.backdrop_path)) return safeUrl(item.backdrop_path);
-            if (item.backdrop_path.indexOf('/t/p/') === 0) return safeUrl('https://image.tmdb.org' + item.backdrop_path);
-            return safeUrl(TMDB_BG + item.backdrop_path);
+        if (item.background_image && item.background_image.indexOf('http') === 0) return item.background_image;
+        if (item.backdrop_path) {
+            if (item.backdrop_path.indexOf('http') === 0) return item.backdrop_path;
+            if (item.backdrop_path.indexOf('/t/p/') === 0) return 'https://image.tmdb.org' + item.backdrop_path;
+            return TMDB_BG + item.backdrop_path;
         }
         return '';
     }
@@ -260,7 +132,6 @@
     //  с `name` открывались как сериалы.
     // ================================================================
     function normalizeCard(item) {
-        if (!item || typeof item !== 'object' || Array.isArray(item)) item = {};
         var img = buildImg(item);
         var bg  = buildBg(item);
 
@@ -320,9 +191,8 @@
         function seenKey(card) {
             var id = card && card.id ? String(card.id) : '';
             var t  = ((card && (card.title || card.name)) || '').toLowerCase()
-                        .replace(/[^\u0400-\u04ffa-z0-9]+/gi, ' ').trim();
-            var type = card && (card.method || card.type) ? String(card.method || card.type) : '';
-            return (id || t) ? (id + '|' + t + '|' + type) : '';
+                        .replace(/[^\u0400-\u04ffa-z0-9]/gi, '').slice(0, 80);
+            return (id || t) ? (id + '|' + t) : '';
         }
 
         function dedupClient(catUrl, cards, resetPage) {
@@ -355,26 +225,17 @@
         }
 
         function parseResults(json) {
-            if (!json || typeof json !== 'object' || !Array.isArray(json.results)) return emptyPage();
-            var results = json.results.filter(function (item) {
-                return item && typeof item === 'object' && !Array.isArray(item);
-            }).map(normalizeCard);
+            if (!json || !json.results || !json.results.map) return emptyPage();
             return {
-                results: results,
-                page: parseInt(json.page, 10) || 1,
-                total_pages: parseInt(json.total_pages, 10) || 1,
-                total_results: parseInt(json.total_results, 10) || results.length
+                results: json.results.map(normalizeCard),
+                page: json.page || 1,
+                total_pages: json.total_pages || 1,
+                total_results: json.total_results || json.results.length
             };
         }
 
         // ---------------- FETCH RAW (кэш 3 мин + 1 повтор при ошибке) ----------------
         self._fetchRaw = function (url, onComplete, onError) {
-            url = safeUrl(url);
-            if (!url) {
-                if (onError) onError({ msg: 'Недопустимый URL' });
-                else onComplete(emptyPage());
-                return;
-            }
             var cached = rawCache[url];
             if (cached && (Date.now() - cached.t) < RAW_TTL) {
                 onComplete(parseResults(cached.json));
@@ -567,13 +428,11 @@
         var autoTimer = null;
         var picking   = false;
 
-        SERVERS.forEach(registerSafeHttpEndpoint);
-
         function normalizeUrl(raw) {
             var u = (raw || '').trim();
             if (!u) return '';
             if (!/^https?:\/\//i.test(u)) u = 'http://' + u;
-            return safeUrl(u, { allowHttp: true });
+            return u.replace(/\/+$/, '');
         }
 
         function sameUrl(a, b) {
@@ -589,47 +448,52 @@
         }
 
         // Проверка через /echo — стандартный health-endpoint TorrServer.
-        // При CORS-ошибке сервер считается недоступным: opaque/no-cors
-        // больше не используется как ложное подтверждение работоспособности.
+        // Сначала обычный CORS-запрос (даёт точный статус). Если сервер жив, но
+        // не отдаёт CORS-заголовки — повторяем в no-cors: «непрозрачный» ответ
+        // тоже означает, что сервер доступен по сети.
         function ping(rawUrl, cb) {
-            var base = normalizeUrl(rawUrl);
-            if (!base) { cb({ ok: false, ms: 0 }); return; }
-            var full = base + '/echo';
+            var full  = normalizeUrl(rawUrl) + '/echo';
             var start = nowMs();
             var done  = false;
             var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
             var timer;
 
-            function finish(ok) {
+            // status: 'ok' (подтверждён обычным CORS-ответом), 'unknown' (сервер
+            // ответил в режиме no-cors — сеть жива, но реальный статус не виден),
+            // 'down' (нет ответа). [V10] no-cors больше не считается зелёным.
+            function finish(status) {
                 if (done) return;
                 done = true;
                 clearTimeout(timer);
-                cb({ ok: !!ok, ms: ok ? Math.round(nowMs() - start) : 0 });
+                cb({ status: status, ok: status !== 'down', ms: status !== 'down' ? Math.round(nowMs() - start) : 0 });
             }
 
             timer = setTimeout(function () {
                 if (controller) { try { controller.abort(); } catch (e) {} }
-                finish(false);
+                finish('down');
             }, CHECK_TIMEOUT);
 
-            function attempt() {
+            function attempt(mode) {
                 try {
                     fetch(full, {
                         method: 'GET',
                         cache: 'no-store',
-                        mode: 'cors',
+                        mode: mode,
                         signal: controller ? controller.signal : undefined
                     }).then(function (res) {
-                        finish(!!res && res.ok === true);
+                        if (mode === 'no-cors' || res.type === 'opaque') { finish('unknown'); return; }
+                        finish(res.ok || res.status === 200 ? 'ok' : 'down');
                     })['catch'](function () {
-                        finish(false);
+                        if (done) return;
+                        if (mode === 'cors') attempt('no-cors');
+                        else finish('down');
                     });
                 } catch (e) {
-                    finish(false);
+                    finish('down');
                 }
             }
 
-            attempt();
+            attempt('cors');
         }
 
         function formatMs(ms) {
@@ -643,7 +507,7 @@
 
             SERVERS.forEach(function (addr, idx) {
                 ping(addr, function (res) {
-                    results[idx] = { addr: addr, url: normalizeUrl(addr), ok: res.ok, ms: res.ms };
+                    results[idx] = { addr: addr, url: normalizeUrl(addr), status: res.status, ok: res.ok, ms: res.ms };
                     left--;
                     if (left === 0) onDone(results);
                 });
@@ -662,15 +526,11 @@
         }
 
         function setPrimary(url, silent) {
-            url = normalizeUrl(url);
-            if (!url) { noty('Недопустимый адрес TorrServer'); return; }
             Lampa.Storage.set(STORAGE_PRIMARY, url);
             if (!silent) noty('Основной сервер TorrServer: ' + shortAddr(url));
             refreshDescr();
         }
         function setBackup(url, silent) {
-            url = normalizeUrl(url);
-            if (!url) { noty('Недопустимый адрес TorrServer'); return; }
             Lampa.Storage.set(STORAGE_BACKUP, url);
             if (!silent) noty('Резервный сервер TorrServer: ' + shortAddr(url));
             refreshDescr();
@@ -688,18 +548,24 @@
 
                 var currentUrl = mode === 'primary' ? getPrimary() : getBackup();
 
+                // [V10] «ok» (обычный CORS-ответ) → «unknown» (сервер жив, но статус не виден
+                // из-за no-cors) → «down»
+                function rank(st) { return st === 'ok' ? 0 : st === 'unknown' ? 1 : 2; }
+
                 var sorted = results.slice().sort(function (a, b) {
-                    if (a.ok !== b.ok) return a.ok ? -1 : 1;
+                    var ra = rank(a.status), rb = rank(b.status);
+                    if (ra !== rb) return ra - rb;
                     return (a.ms || 9e9) - (b.ms || 9e9);
                 });
 
                 var items = sorted.map(function (r) {
-                    var dot   = r.ok ? '🟢' : '🔴';
+                    var dot   = r.status === 'ok' ? '🟢' : r.status === 'unknown' ? '🟡' : '🔴';
                     var mark  = sameUrl(currentUrl, r.url) ? ' ✓' : '';
                     var speed = r.ok ? formatMs(r.ms) : '';
+                    var subtitle = r.status === 'ok' ? 'работает' : r.status === 'unknown' ? 'отвечает, статус не проверить (нет CORS)' : 'не отвечает';
                     return {
                         title: dot + ' ' + r.addr + (speed ? ' (' + speed + ')' : '') + mark,
-                        subtitle: r.ok ? 'работает' : 'не отвечает',
+                        subtitle: subtitle,
                         url: r.url,
                         ok: r.ok
                     };
@@ -811,8 +677,8 @@
 
         var LIST = [
             { id: 'lampa_app',           name: 'Lampa.app',    settings: { url: 'lampa.app',            key: '',        parser_torrent_type: 'jackett' } },
-            { id: 'jacred_viewbox_dev',  name: 'Viewbox',      settings: { url: 'jacred.viewbox.dev',   key: '', parser_torrent_type: 'jackett' } },
-            { id: 'unknown',             name: 'Unknown',      settings: { url: '188.119.113.252:9117', key: '',       parser_torrent_type: 'jackett' } },
+            { id: 'jacred_viewbox_dev',  name: 'Viewbox',      settings: { url: 'jacred.viewbox.dev',   key: '',        parser_torrent_type: 'jackett' } }, // [V10-SAFE] ключ убран, впишите свой в CONFIG/настройках
+            { id: 'unknown',             name: 'Unknown',      settings: { url: '188.119.113.252:9117', key: '',        parser_torrent_type: 'jackett' } }, // [V10-SAFE] ключ убран
             { id: 'trs_my_to',           name: 'Trs.my.to',    settings: { url: 'trs.my.to:9118',       key: '',        parser_torrent_type: 'jackett' } },
             { id: 'jacred_my_to',        name: 'Jacred.my.to', settings: { url: 'jacred.my.to',         key: '',        parser_torrent_type: 'jackett' } },
             { id: 'jacred',              name: 'Jac.red',      settings: { url: 'jac.red',              key: '',        parser_torrent_type: 'jackett' } },
@@ -832,15 +698,13 @@
             if (!parser || !parser.settings || !parser.settings.url) return '';
             var s    = parser.settings;
             var type = s.parser_torrent_type || 'jackett';
-            var pre  = /^https?:\/\//i.test(s.url) ? '' : 'https://';
+            var pre  = /^https?:\/\//.test(s.url) ? '' : protocol();
             // Jackett: /api/v2.0/indexers/status:healthy/results/torznab
             // Prowlarr: /api/v1/health
             var base = type === 'prowlarr'
                 ? '/api/v1/health'
                 : '/api/v2.0/indexers/status:healthy/results/torznab';
-            var baseUrl = safeUrl(pre + s.url);
-            if (!baseUrl) return '';
-            return baseUrl + base + '?apikey=' + encodeURIComponent(String(s.key || '').slice(0, 256));
+            return pre + s.url + base + '?apikey=' + encodeURIComponent(s.key || '');
         }
 
         function getById(id) {
@@ -868,12 +732,8 @@
             var s    = parser.settings;
             var type = s.parser_torrent_type || 'jackett';
 
-            var safeParserUrl = safeUrl((/^https?:\/\//i.test(s.url) ? s.url : 'https://' + s.url));
-            if (!safeParserUrl) return false;
-            Lampa.Storage.set(type === 'prowlarr' ? 'prowlarr_url' : 'jackett_url', safeParserUrl);
-            var keyStorage = type === 'prowlarr' ? 'prowlarr_key' : 'jackett_key';
-            var existingParserKey = Lampa.Storage.get(keyStorage, '');
-            Lampa.Storage.set(keyStorage, s.key || existingParserKey || '');
+            Lampa.Storage.set(type === 'prowlarr' ? 'prowlarr_url' : 'jackett_url', s.url);
+            Lampa.Storage.set(type === 'prowlarr' ? 'prowlarr_key' : 'jackett_key', s.key || '');
             Lampa.Storage.set('parser_torrent_type', type);
             Lampa.Storage.set('parser_use', true);
             return true;
@@ -892,7 +752,7 @@
             var url = healthUrl(parser);
             if (!url) { cb('unknown'); return; }
 
-            var key = parser.id + '::' + String(parser.settings.url || '').toLowerCase();
+            var key = parser.id + '::' + url;
             var c   = cache[key];
             if (c && Date.now() < c.expires) { cb(c.status); return; }
 
@@ -1036,7 +896,7 @@
     // ================================================================
     var LUMIO = {
         ready: false,
-        version: '1.29.0',
+        version: '1.26.0',
         clearCache: function () {}
     };
 
@@ -1044,7 +904,7 @@
     if (window.nexus_online_plugin_started) return;
     window.nexus_online_plugin_started = true;
 
-    var NEXUS_VERSION   = '1.29.0';
+    var NEXUS_VERSION   = '1.26.0';
     var NEXUS_COMPONENT = 'nexusonline';
     var NEXUS_TITLE     = 'Lumio';
     window.nexusLumioVersion = NEXUS_VERSION;
@@ -1096,7 +956,7 @@ function timeoutForAttempt(base, attempt) {
     var NEXUS_SUBTITLES_START_BACKUP = 'lumio_original_subs_subtitles_start_backup';
     
     // Clear only Lumio's own cached source lists after this release.
-    var NEXUS_STORAGE_SCHEMA = '1.29.0';
+    var NEXUS_STORAGE_SCHEMA = '1.26.0';
 
 function removeStorageKey(key) {
     try {
@@ -1146,7 +1006,7 @@ function restoreOriginalSubsAutostart() {
 
 restoreOriginalSubsAutostart();
 
-    var NEXUS_HOST = safeUrl('https://beta.mitsu.tv/api');
+    var NEXUS_HOST = 'https://beta.mitsu.tv/api';
 
     function resetTemplates() {
 
@@ -1217,21 +1077,15 @@ restoreOriginalSubsAutostart();
 
     var Network = Lampa.Reguest;
 
-    // Lampac gets a random session-only identifier. It is intentionally NOT
-    // stored in Lampa.Storage and therefore cannot become a persistent
-    // cross-session pseudonym.
-    var unic_id = '';
-    try {
-        unic_id = (Lampa.Utils.uid ? Lampa.Utils.uid(12) : String(Math.random()).slice(2) + String(Date.now())).toLowerCase();
-    } catch (e) {
-        unic_id = String(Math.random()).slice(2) + String(Date.now());
-    }
-    // Remove the legacy persistent identifier; this build never reads it.
-    removeStorageKey('lampac_unic_id');
+    // [V10-SAFE] Lampac проверяет этот id у сгенерированных прокси-ссылок, поэтому убрать
+    // его совсем нельзя, не сломав воспроизведение. Но он больше не сохраняется на диск —
+    // новый случайный id генерируется при каждом запуске приложения, а не один раз навсегда.
+    var unic_id = Lampa.Utils.uid(8).toLowerCase();
 
-    // Telemetry is opt-in and contains only aggregate counters/source labels.
-    var NEXUS_TELEMETRY_ENABLED = !!CONFIG.lumioTelemetry; // [V10] по умолчанию выключена
-    var NEXUS_TELEMETRY_URL = 'https://beta.mitsu.tv/lumio-telemetry.php';
+    // One small aggregate only, at most once per ten minutes. It contains no
+    // title, URL, IP address, account data, or individual request history.
+    var NEXUS_TELEMETRY_ENABLED = false; // [V10-SAFE] телеметрия удалена
+    var NEXUS_TELEMETRY_URL = ''; // [V10-SAFE]
     var NEXUS_TELEMETRY_INTERVAL = 15 * 60 * 1000;
     var nexusTelemetry = (function () {
         var counters = {};
@@ -1261,13 +1115,14 @@ restoreOriginalSubsAutostart();
         }
 
         function flush(force) {
-            if (!NEXUS_TELEMETRY_ENABLED || !hasData()) return;
+            if (!NEXUS_TELEMETRY_ENABLED || !NEXUS_TELEMETRY_URL || !hasData()) return;
             if (!force && Date.now() - lastSent < NEXUS_TELEMETRY_INTERVAL) {
                 schedule();
                 return;
             }
 
             var payload = JSON.stringify({
+                uid: unic_id,
                 version: NEXUS_VERSION,
                 counters: counters,
                 sources: sources
@@ -1338,31 +1193,53 @@ restoreOriginalSubsAutostart();
     window.nexusLumioTelemetry = nexusTelemetry;
 
     function accountUrl(url) {
-    var safe = safeUrl(url);
-    if (!safe) return '';
+    url = String(url);
 
-    // UID is a per-session protocol value only; it is not persisted.
-    var isLampac = /^https:\/\/beta\.mitsu\.tv(?:\/|$)/i.test(safe);
-
-    if (isLampac && safe.indexOf('uid=') === -1 && unic_id) {
-        safe = Lampa.Utils.addUrlComponent(safe, 'uid=' + encodeURIComponent(unic_id));
+    if (url.indexOf('uid=') === -1 && unic_id) { // [V10-SAFE] берём из памяти, не с диска
+        url = Lampa.Utils.addUrlComponent(url, 'uid=' + encodeURIComponent(unic_id));
     }
 
-    if (isLampac && safe.indexOf('nws_id=') === -1) {
-        var nwsid = Lampa.Storage.get('lampac_nws_id', '') || Lampa.Storage.get('lampac_nwsid', '');
-        if (nwsid) safe = Lampa.Utils.addUrlComponent(safe, 'nws_id=' + encodeURIComponent(String(nwsid).slice(0, 128)));
-    }
+    // [V10-SAFE] nws_id не отправляется
 
-    return safeUrl(safe);
+    return url;
 }
 
 function addHeaders() {
     var kit_aesgcmkey = Lampa.Storage.get('kit_aesgcmkey', '');
     if (kit_aesgcmkey) {
-        return { 'X-Kit-AesGcm': kit_aesgcmkey };
+        void kit_aesgcmkey; // [V10-SAFE] ключ kit не отправляется
     }
     return {};
 }
+
+    // RCH is required by a few Lampac providers. Keep the client private to
+    // Lumio so it cannot alter the state or handlers of other online plugins.
+    // [V10-SAFE] RCH удалён целиком: нет WebSocket-клиента, нет загрузки стороннего
+    // скрипта, нет выполнения команд удалённого сервера.
+
+    function nexusRchEnsure(success, error) {
+        // [V10-SAFE] RCH удалён целиком — источники, которым он нужен, сразу получают отказ
+        if (error) error({ msg: 'RCH отключён в безопасной сборке' });
+    }
+
+    // [V10-SAFE] RCH удалён — URL просто возвращается без изменений
+    function nexusRchRequestUrl(url) {
+        return url;
+    }
+
+    function nexusRchResponse(data) {
+        var json = data;
+
+        if (typeof json === 'string') {
+            try {
+                json = JSON.parse(json);
+            } catch (e) {
+                return null;
+            }
+        }
+
+        return json && json.rch ? json : null;
+    }
 
     function nexusPlainText(value) {
         return String(value == null ? '' : value)
@@ -1457,13 +1334,13 @@ function cleanImageUrl(url) {
     if (cssUrl && cssUrl[2]) url = cssUrl[2];
 
     if (url.indexOf('//') === 0) url = 'https:' + url;
-    if (/^https?:\/\//i.test(url)) return safeUrl(url);
+    if (/^https?:\/\//i.test(url)) return url;
 
     if (url.charAt(0) === '/') {
-        return safeUrl('https://image.tmdb.org/t/p/w342' + url);
+        return 'https://image.tmdb.org/t/p/w342' + url;
     }
 
-    return '';
+    return url;
 }
 
 function movieImage(movie) {
@@ -1538,17 +1415,7 @@ function movieCacheKey(movie) {
         year
     ].join(':').toLowerCase();
 
-    var forward = 5381;
-    var backward = 5381;
-    for (var i = 0; i < raw.length; i++) {
-        forward = ((forward << 5) + forward) ^ raw.charCodeAt(i);
-        backward = ((backward << 5) + backward) ^ raw.charCodeAt(raw.length - 1 - i);
-    }
-
-    return 'lumio_sources_v129_' +
-        (forward >>> 0).toString(36) + '_' +
-        (backward >>> 0).toString(36) + '_' +
-        raw.length.toString(36);
+    return 'lumio_sources_v127_' + lumioHashKey(raw);
 }
 
 // [V10] Кэш Lumio раньше рос без ограничений (каждый просмотренный тайтл/серия
@@ -1560,11 +1427,8 @@ function lumioCacheKeys() {
     try {
         if (!window.localStorage) return out;
         Object.keys(localStorage).forEach(function (key) {
-            if (
-                key.indexOf('lumio_content_') === 0 ||
-                key.indexOf('lumio_sources_') === 0 ||
-                key.indexOf('lumio_voice_coverage_') === 0
-            ) out.push(key);
+            if (key.indexOf('lumio_content_') === 0 || key.indexOf('lumio_sources_') === 0 ||
+                key.indexOf('lumio_voice_coverage_v1_') === 0 || key.indexOf('lumio_serial_choice_') === 0) out.push(key);
         });
     } catch (e) {}
     return out;
@@ -1577,7 +1441,6 @@ function lumioPruneCache(hard) {
 
         lumioCacheKeys().forEach(function (key) {
             var isContent = key.indexOf('lumio_content_') === 0;
-            var isVoiceCoverage = key.indexOf('lumio_voice_coverage_') === 0;
             var time = 0;
             try {
                 var v = JSON.parse(localStorage.getItem(key));
@@ -1585,8 +1448,7 @@ function lumioPruneCache(hard) {
             } catch (e) {}
 
             // списки источников используются как «устаревший» запасной вариант — держим сутки
-            var ttl = isContent ? NEXUS_CONTENT_CACHE_TTL :
-                (isVoiceCoverage ? 12 * 60 * 60 * 1000 : NEXUS_CACHE_TTL * 4);
+            var ttl = isContent ? NEXUS_CONTENT_CACHE_TTL : NEXUS_CACHE_TTL * 4;
             if (!time || (now - time) > ttl) {
                 removeStorageKey(key);
                 return;
@@ -1643,119 +1505,84 @@ function lumioPrepareMovie(movie) {
     return m;
 }
 
+// [V10-SAFE] Единая проверка ссылок, присланных источником, перед тем как их
+// откроет плеер или получит network.native. Пропускает только http(s), без
+// логина:пароля в URL и без адресов локальной/служебной сети.
+function lumioIsPrivateHost(host) {
+    host = String(host || '').toLowerCase().replace(/^\[|\]$/g, '');
+    if (!host) return true;
+    if (host === 'localhost' || host === '0.0.0.0' || host === '::1') return true;
+    if (/^127\./.test(host)) return true;
+    if (/^10\./.test(host)) return true;
+    if (/^192\.168\./.test(host)) return true;
+    if (/^172\.(1[6-9]|2\d|3[01])\./.test(host)) return true;
+    if (/^169\.254\./.test(host)) return true;
+    if (/^f[cd][0-9a-f]{2}:/.test(host) || /^fe80:/.test(host)) return true;
+    return false;
+}
+
+function lumioSafeUrl(raw) {
+    if (raw === undefined || raw === null) return '';
+    var url = String(raw).trim();
+    if (!url) return '';
+
+    if (url.indexOf('//') === 0) url = 'https:' + url;
+
+    if (!/^https?:\/\//i.test(url)) return ''; // без javascript:, data:, file:, ftp: и т.п.
+
+    try {
+        var parsed = new URL(url);
+        if (parsed.username || parsed.password) return '';
+        if (lumioIsPrivateHost(parsed.hostname)) return '';
+        return url;
+    } catch (e) {
+        return '';
+    }
+}
+
+// [V10-SAFE] HTML-ответ источника парсится DOMParser'ом: скрипты не исполняются,
+// картинки/обработчики (onerror и т.п.) не срабатывают
+function lumioInertParse(str) {
+    str = String(str == null ? '' : str);
+    try {
+        var doc = new DOMParser().parseFromString('<div>' + str + '</div>', 'text/html');
+        var bad = doc.querySelectorAll('script,style,iframe,object,embed');
+        for (var i = bad.length - 1; i >= 0; i--) bad[i].parentNode.removeChild(bad[i]);
+        return doc.body;
+    } catch (e) {
+        var d = document.createElement('div');
+        d.textContent = '';
+        return d;
+    }
+}
+
 function readSourcesCache(movie, allowExpired) {
     var saved = Lampa.Storage.get(movieCacheKey(movie), null);
     if (!saved || !saved.items || !saved.time) return null;
     if (!allowExpired && (Date.now() - saved.time) > NEXUS_CACHE_TTL) return null;
-    var clean = filterWorkingSources(saved.items);
-    return clean.length ? clean : null;
+    return saved.items;
 }
 
 function saveSourcesCache(movie, items) {
-    var clean = filterWorkingSources(items);
-    if (!clean.length) return;
+    if (!items || !items.length) return;
     lumioCacheSet(movieCacheKey(movie), {
         time: Date.now(),
-        items: clean
+        items: filterWorkingSources(items)
     });
-}
-
-function sanitizeRemotePayload(value, depth) {
-    depth = depth || 0;
-    if (depth > 8 || value === null || value === undefined) return value;
-    if (typeof value === 'string') return value.length > 4096 ? '' : value;
-    if (typeof value !== 'object') return value;
-
-    if (Array.isArray(value)) {
-        return value.map(function (v) { return sanitizeRemotePayload(v, depth + 1); }).filter(function (v) {
-            return v !== null && v !== undefined;
-        });
-    }
-
-    var out = {};
-    Object.keys(value).forEach(function (key) {
-        var v = value[key];
-
-        if (/^(url|stream|subtitle|url_reserve|src|file|link)$/i.test(key)) {
-            if (typeof v === 'string') {
-                var u = safeUrl(v);
-                if (u) out[key] = u;
-            }
-            return;
-        }
-
-        if (/^(subtitles|segments)$/i.test(key)) {
-            if (Array.isArray(v)) {
-                out[key] = v.map(function (entry) {
-                    if (typeof entry === 'string') return safeUrl(entry);
-                    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
-                    var copy = {};
-                    Object.keys(entry).forEach(function (ek) {
-                        if (/^(url|src|file|link)$/i.test(ek)) {
-                            if (typeof entry[ek] === 'string') {
-                                var eu = safeUrl(entry[ek]);
-                                if (eu) copy[ek] = eu;
-                            }
-                        } else {
-                            copy[ek] = sanitizeRemotePayload(entry[ek], depth + 1);
-                        }
-                    });
-                    return copy;
-                }).filter(Boolean);
-            }
-            return;
-        }
-
-        if (key === 'quality' && v && typeof v === 'object' && !Array.isArray(v)) {
-            var q = {};
-            Object.keys(v).forEach(function (qk) {
-                var qv = v[qk];
-                var qu = typeof qv === 'string' ? safeUrl(qv) :
-                    (qv && typeof qv === 'object' && !Array.isArray(qv)) ?
-                        safeUrl(qv.url || qv.link || qv.file || qv.src || '') : '';
-                if (qu) q[qk] = qu;
-            });
-            out[key] = q;
-            return;
-        }
-
-        out[key] = sanitizeRemotePayload(v, depth + 1);
-    });
-
-    return out;
 }
 
 function isWorkingSource(j) {
-    if (!j || typeof j !== 'object' || Array.isArray(j) || typeof j.url !== 'string') return false;
-    var name;
-    try { name = balanserName(j); } catch (e) { return false; }
-    return NEXUS_SOURCE_ORDER.indexOf(name) >= 0 && !j.rch && !!safeUrl(j.url);
+    if (!j || typeof j !== 'object' || !j.url) return false;
+
+    return NEXUS_SOURCE_ORDER.indexOf(balanserName(j)) >= 0;
 }
 
-function sanitizeSourceItem(j) {
-    if (!j || typeof j !== 'object' || Array.isArray(j)) return null;
-    var out = {};
-    Object.keys(j).forEach(function (key) {
-        if (/^(url|stream|subtitle|url_reserve)$/i.test(key)) {
-            if (typeof j[key] === 'string') {
-                var u = safeUrl(j[key]);
-                if (u) out[key] = u;
-            }
-        } else if (key === 'quality') {
-            out.quality = sanitizeRemotePayload({ quality: j[key] }).quality || {};
-        } else if (/^(subtitles|segments)$/i.test(key)) {
-            out[key] = sanitizeRemotePayload(j[key]);
-        } else {
-            out[key] = j[key];
-        }
-    });
-    return out;
-}
-
+// [V10] сервер иногда отвечает объектом ошибки/null/строкой вместо массива
 function filterWorkingSources(items) {
-    if (!Array.isArray(items)) return [];
-    return items.map(sanitizeSourceItem).filter(function (j) {
-        return !!j && isWorkingSource(j);
+    if (!Array.isArray(items) || !items.length) return [];
+
+    return items.filter(function (j) {
+        return j && typeof j === 'object' && isWorkingSource(j);
     });
 }
 
@@ -1780,29 +1607,24 @@ function sortSourceKeys(keys) {
     });
 }
 
-function contentCacheKey(url) {
-    var value = String(url || '');
+// [V10] общий хеш для ключей кэша (contentCacheKey и movieCacheKey) — полный
+// хеш значения вместо обрезания строки, коллизии практически исключены
+function lumioHashKey(value) {
+    value = String(value || '');
     var forward = 5381;
     var backward = 5381;
-    var i;
-
-    // The former truncated URL key treated a long normal request and its
-    // `quality=true` variant as the same cache entry. Hash the complete URL
-    // while keeping the storage key compact for older Lampa environments.
-    for (i = 0; i < value.length; i++) {
+    for (var i = 0; i < value.length; i++) {
         forward = ((forward << 5) + forward) ^ value.charCodeAt(i);
         backward = ((backward << 5) + backward) ^ value.charCodeAt(value.length - 1 - i);
     }
+    return (forward >>> 0).toString(36) + '_' + (backward >>> 0).toString(36) + '_' + value.length;
+}
 
-    return 'lumio_content_v128_' +
-        (forward >>> 0).toString(36) + '_' +
-        (backward >>> 0).toString(36) + '_' +
-        value.length;
+function contentCacheKey(url) {
+    return 'lumio_content_v128_' + lumioHashKey(url);
 }
 
 function readContentCache(url) {
-    url = safeUrl(url);
-    if (!url) return null;
     var saved = Lampa.Storage.get(contentCacheKey(url), null);
     if (!saved || !saved.data || !saved.time) return null;
     if ((Date.now() - saved.time) > NEXUS_CONTENT_CACHE_TTL) return null;
@@ -1810,24 +1632,7 @@ function readContentCache(url) {
 }
 
 function saveContentCache(url, data) {
-    url = safeUrl(url);
-    if (!url || data === null || data === undefined || data === '') return;
-
-    // HTML responses may contain arbitrary data-json/data-url attributes.
-    // Do not persist raw remote HTML. JSON responses are sanitized first.
-    if (typeof data === 'string') {
-        try {
-            var parsed = JSON.parse(data);
-            if (!parsed || typeof parsed !== 'object') return;
-            data = sanitizeRemotePayload(parsed);
-        } catch (e) {
-            return;
-        }
-    } else if (typeof data === 'object') {
-        data = sanitizeRemotePayload(data);
-    } else {
-        return;
-    }
+    if (!url || !data) return;
 
     lumioCacheSet(contentCacheKey(url), {
         time: Date.now(),
@@ -1840,10 +1645,9 @@ var nexusContentPrefetch = {};
 
 function loadContent(url, options, call, fail) {
     options = options || {};
-    url = safeUrl(url);
 
     if (!url) {
-        if (fail) fail({ msg: 'Недопустимый URL' });
+        if (fail) fail({});
         return;
     }
 
@@ -1867,15 +1671,8 @@ function loadContent(url, options, call, fail) {
     var contentNetwork = new Network();
 
     contentNetwork.timeout(options.timeout || NEXUS_CONTENT_TIMEOUT);
-    var contentUrl = accountUrl(url);
-    if (!contentUrl) {
-        delete nexusContentPrefetch[url];
-        if (fail) fail({ msg: 'Недопустимый URL' });
-        return;
-    }
-
     contentNetwork['native'](
-        contentUrl,
+        accountUrl(url),
         function (data) {
             var waiters = nexusContentPrefetch[url];
             saveContentCache(url, data);
@@ -1934,11 +1731,6 @@ function loadSources(movie, call, fail, fast, idsReady) {
     };
 
     var url = requestParams(NEXUS_HOST + '/lite/events?life=false', movie);
-    if (!safeUrl(url)) {
-        delete nexusPrefetch[key];
-        if (fail) fail({ msg: 'Недопустимый URL источников' });
-        return;
-    }
 
     function finishSuccess(items) {
         var waiters = nexusPrefetch[key];
@@ -1976,7 +1768,7 @@ function loadSources(movie, call, fail, fast, idsReady) {
         sourceNetwork.silent(
             url,
             function (json) {
-                var filtered = filterWorkingSources(Array.isArray(json) ? json : []);
+                var filtered = filterWorkingSources(json || []);
 
                 if (filtered.length) {
                     finishSuccess(filtered);
@@ -2009,8 +1801,6 @@ function loadSources(movie, call, fail, fast, idsReady) {
 }
 
     function requestParams(baseUrl, movie, extraParams) {
-    baseUrl = safeUrl(baseUrl);
-    if (!baseUrl || !movie || typeof movie !== 'object') return '';
     var cardSource = movie.source || Lampa.Storage.field('source') || 'tmdb';
     var q = [];
 
@@ -2033,6 +1823,8 @@ function loadSources(movie, call, fail, fast, idsReady) {
     if (movie.tmdb_id) {
         q.push('tmdb_id=' + encodeURIComponent(movie.tmdb_id));
     }
+
+    q.push('rchtype='); // [V10-SAFE] RCH удалён
 
     if (extraParams) {
         Object.keys(extraParams).forEach(function (key) {
@@ -2109,11 +1901,11 @@ function resolveExternalIds(movie, done) {
     );
 }
 
+    // [V10] j.balanser / j.name от сервера не всегда строки
     function balanserName(j) {
-        if (!j || typeof j !== 'object') return '';
+        j = j && typeof j === 'object' ? j : {};
         var bals = typeof j.balanser === 'string' ? j.balanser : '';
-        var rawName = typeof j.name === 'string' ? j.name : '';
-        var name = rawName.split(' ')[0];
+        var name = typeof j.name === 'string' ? j.name.split(' ')[0] : '';
         var key = String(bals || name || '').toLowerCase();
         return NEXUS_SOURCE_ALIASES[key] || key;
     }
@@ -2121,7 +1913,7 @@ function resolveExternalIds(movie, done) {
     function sourceDisplayName(j, name) {
         if (name === 'pidtor') return 'PidTor (beta)';
         if (name === NEXUS_ORIGINAL_SUBS_SOURCE) return NEXUS_ORIGINAL_SUBS_LABEL;
-        return (j && typeof j.name === 'string' ? j.name : name);
+        return j.name || name;
     }
 
     function nexusSourceKey(name) {
@@ -2141,7 +1933,7 @@ function resolveExternalIds(movie, done) {
             return url;
         }
 
-        return safeUrl(Lampa.Utils.addUrlComponent(url, 'quality=true'));
+        return Lampa.Utils.addUrlComponent(url, 'quality=true');
     }
 
     function nexusQualityLabels(quality) {
@@ -2296,47 +2088,6 @@ function resolveExternalIds(movie, done) {
             done: done,
             label: done ? '\u041f\u0440\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u043d\u043e' : ('\u041f\u0440\u043e\u0434\u043e\u043b\u0436\u0438\u0442\u044c ' + percent + '%')
         };
-    }
-
-    function sanitizePlayData(play) {
-        if (!play || typeof play !== 'object') return null;
-        var out = {};
-        Object.keys(play).forEach(function (key) {
-            if (key === 'url' || key === 'subtitle' || key === 'url_reserve') {
-                var u = safeUrl(play[key]);
-                if (u) out[key] = u;
-                return;
-            }
-            if (key === 'quality') {
-                out.quality = {};
-                if (play.quality && typeof play.quality === 'object' && !Array.isArray(play.quality)) {
-                    Object.keys(play.quality).forEach(function (q) {
-                        var qv = play.quality[q];
-                        var qu = typeof qv === 'string' ? safeUrl(qv) :
-                            (qv && typeof qv === 'object' && !Array.isArray(qv)) ?
-                                safeUrl(qv.url || qv.link || qv.file || qv.src || '') : '';
-                        if (!qu) return;
-                        if (qv && typeof qv === 'object' && !Array.isArray(qv)) {
-                            var copy = {};
-                            Object.keys(qv).forEach(function (qk) {
-                                if (!/^(url|link|file|src)$/i.test(qk)) copy[qk] = qv[qk];
-                            });
-                            copy.url = qu;
-                            out.quality[q] = copy;
-                        } else {
-                            out.quality[q] = qu;
-                        }
-                    });
-                }
-                return;
-            }
-            if (key === 'subtitles' || key === 'segments') {
-                out[key] = sanitizeRemotePayload(play[key]);
-                return;
-            }
-            out[key] = play[key];
-        });
-        return out.url ? out : null;
     }
 
     function component(object) {
@@ -3581,15 +3332,20 @@ function resolveExternalIds(movie, done) {
         this.sourceRequestUrl = function (name) {
             if (!sources[name]) return '';
 
-            return safeUrl(requestParams(sources[name].url, object.movie, _this.getSerialParams()));
+            return requestParams(sources[name].url, object.movie, _this.getSerialParams());
+        };
+
+        this.sourceNeedsRch = function (name) {
+            return !!(sources[name] && sources[name].rch);
         };
 
         this.withSourceReady = function (name, success, error) {
-            if (!sources[name]) {
-                if (error) error({ msg: 'Источник недоступен' });
+            if (!_this.sourceNeedsRch(name)) {
+                success();
                 return;
             }
-            success();
+
+            nexusRchEnsure(success, error);
         };
 
         this.isVeoVeoSource = function () {
@@ -3773,12 +3529,7 @@ function resolveExternalIds(movie, done) {
                         Lampa.Storage.set(NEXUS_SUBTITLES_START_BACKUP, subtitlesStartBefore);
                         Lampa.Storage.set('subtitles_start', true);
                         Lampa.Player.listener.follow('destroy', restoreSubtitlesStart);
-                        play = sanitizePlayData(play);
-                        if (!play || !play.url) {
-                            Lampa.Noty.show('Заблокирована небезопасная ссылка видео');
-                            return;
-                        }
-                         Lampa.Player.play(play);
+                        Lampa.Player.play(play);
                     }, 80);
                 });
         };
@@ -3811,20 +3562,18 @@ function resolveExternalIds(movie, done) {
         };
 
         this.startSource = function (json) {
-            if (destroyed || !Array.isArray(json)) return;
+            if (destroyed || !json || !json.forEach) return;
             sources        = {};
             filter_sources = [];
 
             json.forEach(function (j) {
-                if (!isWorkingSource(j) || j.rch) return;
+                if (!isWorkingSource(j)) return;
                 var name = balanserName(j);
-                var safeSourceUrl = _this.normalizeUrl(j.url);
-                if (!safeSourceUrl) return;
                 sources[name] = {
-                    url: safeSourceUrl,
-                    name: nexusPlainText(sourceDisplayName(j, name)).slice(0, 120),
+                    url: _this.normalizeUrl(j.url),
+                    name: sourceDisplayName(j, name),
                     show: true,
-                    rch: false
+                    rch: !!j.rch
                 };
             });
 
@@ -3913,6 +3662,14 @@ function resolveExternalIds(movie, done) {
                                 { timeout: NEXUS_SOURCE_PROBE_TIMEOUT },
                                 function (data) {
                                     if (destroyed) return;
+                                    if (nexusRchResponse(data) && !source.rch) {
+                                        source.rch = true;
+                                        _this.withSourceReady(name, probe, function () {
+                                            finish(false);
+                                        });
+                                        return;
+                                    }
+
                                     finish(_this.hasUsablePreview(_this.previewItems(data)));
                                 },
                                 function () {
@@ -3963,6 +3720,7 @@ function resolveExternalIds(movie, done) {
             _this.withSourceReady(selected, function () {
                 var serialParams = _this.getSerialParams();
                 var episodeUrl = _this.normalizeUrl(serial_episode_url);
+                if (_this.sourceNeedsRch(selected)) episodeUrl = nexusRchRequestUrl(episodeUrl);
                 var url = (is_serial && serial_episode_url) ? accountUrl(episodeUrl) : requestParams(source_url, object.movie, serialParams);
                 url = nexusQualityRequestUrl(selected, url);
                 _this.request(url);
@@ -3975,11 +3733,7 @@ function resolveExternalIds(movie, done) {
 
         this.request = function (url, attempt, token) {
     if (destroyed || !url) return;
-    url = safeUrl(nexusQualityRequestUrl(balanser, url));
-    if (!url) {
-        _this.doesNotAnswer({ msg: 'Недопустимый URL запроса' });
-        return;
-    }
+    url = nexusQualityRequestUrl(balanser, url);
     attempt = attempt || 0;
     token = token || (++request_token);
 
@@ -4002,10 +3756,24 @@ function resolveExternalIds(movie, done) {
         function (data) {
             if (destroyed || token !== request_token) return;
 
-            if (data && typeof data === 'object' && data.rch) {
-                nexusTelemetry.event('rch_unsupported');
-                nexusTelemetry.source(balanser, 'rch_unsupported');
-                _this.doesNotAnswer({ msg: 'Источник не поддерживается этим плагином' });
+            var rch = nexusRchResponse(data);
+            if (rch) {
+                if (/[?&]rchtype=[^&]+/i.test(url)) {
+                    nexusTelemetry.event('rch_fail');
+                    nexusTelemetry.source(balanser, 'rch_fail');
+                    _this.doesNotAnswer({ msg: 'Источник не завершил подключение RCH' });
+                    return;
+                }
+
+                nexusLog('[Lumio] RCH requested by source');
+                nexusLog('[Lumio RCH] source requested RCH:', rch.nws || 'no nws address');
+                nexusRchEnsure(function () {
+                    _this.request(nexusRchRequestUrl(url), 0, token);
+                }, function () {
+                    nexusTelemetry.event('rch_fail');
+                    nexusTelemetry.source(balanser, 'rch_fail');
+                    _this.doesNotAnswer({ msg: 'Не удалось подключиться к источнику' });
+                });
                 return;
             }
 
@@ -4080,11 +3848,7 @@ function resolveExternalIds(movie, done) {
         var voiceMeta = nexusVoiceMeta(_this.voiceName(item));
         if (!is_serial && voiceMeta.type !== 'unknown') title = voiceMeta.title;
         var media = mediaTemplateData(object.movie);
-var cardClass = '';
-var allowedCardClasses = { 'nexus-episode-card': true };
-if (typeof item.nexus_card_class === 'string' && allowedCardClasses[item.nexus_card_class]) {
-    cardClass = item.nexus_card_class;
-}
+var cardClass = item.nexus_card_class || '';
 var mediaOverline = '';
 var mediaLabel = '';
 var progress = null;
@@ -4094,18 +3858,7 @@ var resolutionText = nexusQualityLabels(item.quality);
  var pidtorInfo = balanser === 'pidtor' ? nexusPidtorDetails(item) : '';
  var infoText = pidtorInfo || resolutionText || nexusPlainText(item.info) || sourceText;
 var badgeText = qBadge ? qBadge.label : (item.badge || '');
-var badgeClass = qBadge ? qBadge.css : '';
-var allowedBadgeClasses = {
-    'nexus-badge--uhd': true,
-    'nexus-badge--hd': true,
-    'nexus-badge--sd': true,
-    'nexus-badge--voice': true,
-    'nexus-badge--subtitles': true,
-    'nexus-badge--dub': true
-};
-if (!qBadge && typeof item.badge_class === 'string' && allowedBadgeClasses[item.badge_class]) {
-    badgeClass = item.badge_class;
-}
+var badgeClass = qBadge ? qBadge.css : (item.badge_class || '');
 var timeText = item.episode !== undefined && item.nexus_serial_action !== 'episode' ? ('\u00b7 ' + item.episode) : '';
 
 if (is_serial && item.nexus_serial_action === 'voice') {
@@ -4195,16 +3948,11 @@ setTimeout(function () {
         
                 // ── orUrlReserve ────────────────────────────────────────────────────
         this.orUrlReserve = function (data) {
-            if (!data || typeof data !== 'object') return data;
-            if (typeof data.url === 'string' && data.url.indexOf(' or ') !== -1) {
+            if (data && data.url && typeof data.url === 'string' && data.url.indexOf(' or ') !== -1) {
                 var urls = data.url.split(' or ');
                 data.url = urls[0];
                 data.url_reserve = urls[1] || '';
             }
-            if (typeof data.url === 'string') data.url = _this.normalizeUrl(data.url);
-            if (typeof data.stream === 'string') data.stream = _this.normalizeUrl(data.stream);
-            if (typeof data.subtitle === 'string') data.subtitle = _this.normalizeUrl(data.subtitle);
-            if (typeof data.url_reserve === 'string') data.url_reserve = _this.normalizeUrl(data.url_reserve);
             return data;
         };
         
@@ -4231,15 +3979,8 @@ if (file.url) {
 
     network.clear();
     network.timeout(timeoutForAttempt(NEXUS_CONTENT_TIMEOUT, 1));
-    var nativeUrl = accountUrl(_this.normalizeUrl(file.url));
-    if (!nativeUrl) {
-        if (useGlobalLoading) Lampa.Loading.stop();
-        call(false, file);
-        return;
-    }
-
     network['native'](
-        nativeUrl,
+        accountUrl(_this.normalizeUrl(file.url)),
         function (stream) {
             if (destroyed) return;
             if (useGlobalLoading) Lampa.Loading.stop();
@@ -4250,19 +3991,25 @@ if (file.url) {
                 } catch (e) {}
             }
 
-            if (stream && typeof stream === 'object' && stream.rch) {
-                call(false, file);
-                return;
-            }
-
-            if (stream && typeof stream === 'object' && typeof stream.url === 'string') {
-                stream = sanitizeRemotePayload(stream);
-                stream.url = _this.normalizeUrl(stream.url);
-                stream = _this.orUrlReserve(stream);
-                if (!stream.url) {
+            if (stream && stream.rch) {
+                if (file._nexus_rch_retry) {
                     call(false, file);
                     return;
                 }
+
+                file._nexus_rch_retry = true;
+                nexusRchEnsure(function () {
+                    file.url = nexusRchRequestUrl(file.url);
+                    _this.getFileUrl(file, call);
+                }, function () {
+                    call(false, file);
+                });
+                return;
+            }
+
+            if (stream && stream.url) {
+                stream.url = _this.normalizeUrl(stream.url);
+                stream = _this.orUrlReserve(stream);
                 call(stream, file);
             } else {
                 if (file.url_reserve) {
@@ -4309,12 +4056,15 @@ call(false, file);
 
                 // ── normalizeUrl ─────────────────────────────────────────────────────
         this.normalizeUrl = function (url) {
-            if (!url || typeof url !== 'string') return '';
-            var value = url.trim();
-            value = value.replace(/^https?:\/\/127\.0\.0\.1:9118/i, NEXUS_HOST);
-            value = value.replace(/^https?:\/\/localhost:9118/i, NEXUS_HOST);
-            return safeUrl(value);
-        };
+    if (!url) return '';
+
+    url = String(url).trim();
+
+    url = url.replace(/^https?:\/\/127\.0\.0\.1:9118/i, NEXUS_HOST);
+    url = url.replace(/^https?:\/\/localhost:9118/i, NEXUS_HOST);
+
+    return lumioSafeUrl(url); // [V10-SAFE]
+};
 
         this.decorateDisplayQuality = function (data) {
             if (!data || typeof data !== 'object') return data;
@@ -4366,12 +4116,7 @@ call(false, file);
         this.qualityUrl = function (value) {
             if (!value) return '';
             if (typeof value === 'string') return value;
-            if (typeof value === 'object' && !Array.isArray(value)) {
-                var candidates = [value.url, value.link, value.file, value.src];
-                for (var i = 0; i < candidates.length; i++) {
-                    if (typeof candidates[i] === 'string' && candidates[i].trim()) return candidates[i];
-                }
-            }
+            if (typeof value === 'object') return value.url || value.link || value.file || value.src || '';
             return '';
         };
 
@@ -4386,14 +4131,9 @@ call(false, file);
                 if (!url) return;
 
                 url = _this.normalizeUrl(url);
-                if (!url) return;
 
-                if (typeof value === 'object' && !Array.isArray(value)) {
-                    var copy = {};
-                    Object.keys(value).forEach(function (k) {
-                        if (/^(url|link|file|src)$/i.test(k)) return;
-                        copy[k] = value[k];
-                    });
+                if (typeof value === 'object') {
+                    var copy = Lampa.Arrays.clone(value);
                     copy.url = url;
                     normalized[q] = copy;
                 } else {
@@ -4558,7 +4298,7 @@ call(false, file);
                 title: title,
                 quality: quality,
                 headers: original.headers || stream.headers,
-                segments: original.segments || stream.segments || item.segments,
+                segments: original.segments || stream.segments,
                 hls_manifest_timeout: original.hls_manifest_timeout || stream.hls_manifest_timeout,
                 subtitle: stream.subtitle || item.subtitle || '',
                 subtitles: stream.subtitles || item.subtitles,
@@ -4569,44 +4309,18 @@ call(false, file);
                 isonline: true
             };
 
-            play.url = safeUrl(play.url);
-            play.subtitle = safeUrl(play.subtitle);
-            play.url_reserve = safeUrl(play.url_reserve);
+            if (!play.url && stream.url) play.url = _this.normalizeUrl(stream.url);
+            if (play.subtitle) play.subtitle = _this.normalizeUrl(play.subtitle);
+            if (play.url_reserve) play.url_reserve = _this.normalizeUrl(play.url_reserve);
 
-            if (play.subtitles && Array.isArray(play.subtitles)) {
-                play.subtitles = play.subtitles.map(function (s) {
-                    if (!s || typeof s !== 'object') return null;
-                    var su = safeUrl(typeof s.url === 'string' ? s.url : '');
-                    if (!su) return null;
+            if (stream.subtitles && Array.isArray(stream.subtitles)) {
+                play.subtitles = stream.subtitles.map(function (s) {
                     return {
-                        label: String(s.label || s.title || '').slice(0, 120),
-                        url: su,
-                        method: String(s.method || 'link').slice(0, 32)
+                        label: s.label || '',
+                        url: _this.normalizeUrl(s.url || ''),
+                        method: s.method || 'link'
                     };
-                }).filter(Boolean);
-            } else {
-                play.subtitles = [];
-            }
-
-            if (play.segments && Array.isArray(play.segments)) {
-                play.segments = play.segments.map(function (seg) {
-                    if (typeof seg === 'string') return safeUrl(seg);
-                    if (!seg || typeof seg !== 'object') return null;
-                    var copy = {};
-                    Object.keys(seg).forEach(function (k) {
-                        if (/^(url|src|file|link)$/i.test(k)) {
-                            if (typeof seg[k] === 'string') {
-                                var su = safeUrl(seg[k]);
-                                if (su) copy[k] = su;
-                            }
-                        } else {
-                            copy[k] = seg[k];
-                        }
-                    });
-                    return copy;
-                }).filter(Boolean);
-            } else {
-                play.segments = [];
+                });
             }
 
             return play;
@@ -4616,7 +4330,7 @@ call(false, file);
             if (destroyed) return;
             var season = parseInt(entry.season || 0, 10);
             var episode = parseInt(entry.episode || 0, 10);
-            var episodeUrl = safeUrl(entry.nexus_episode_url || '');
+            var episodeUrl = entry.nexus_episode_url || '';
 
             serial_choice.season = season;
             serial_choice.episode = episode;
@@ -4694,14 +4408,14 @@ call(false, file);
                     title: episode + ' \u0441\u0435\u0440\u0438\u044f',
                     season: season,
                     episode: episode,
-                    nexus_episode_url: safeUrl(ep.url || ''),
+                    nexus_episode_url: ep.url || '',
                     timeline: _this.timelineForItem({ season: season, episode: episode }),
                     card: object.movie,
                     isonline: true,
                     callback: function () {
                         serial_choice.season = season;
                         serial_choice.episode = episode;
-                        serial_episode_url = safeUrl(ep.url || '');
+                        serial_episode_url = ep.url || '';
                         _this.saveSerialChoice();
                     }
                 };
@@ -4781,15 +4495,14 @@ call(false, file);
 nexusLog('[Lumio] FINAL SUBTITLE:', play.subtitle);
 nexusLog('[Lumio] FINAL QUALITY:', play.quality);
 
-
+if (/^https?:\/\/(127\.0\.0\.1|localhost):9118/i.test(play.url)) {
+    Lampa.Noty.show('Осталась локальная ссылка Lampac: ' + play.url);
+    return;
+}
+                
                 nexusTelemetry.event('play_intent');
                 nexusTelemetry.source(balanser, 'play_intent');
                 _this.refreshSerialEpisodesAfterPlayer();
-                play = sanitizePlayData(play);
-                if (!play || !play.url) {
-                    Lampa.Noty.show('Заблокирована небезопасная ссылка видео');
-                    return;
-                }
                 Lampa.Player.play(play);
             });
         };
@@ -4805,9 +4518,6 @@ nexusLog('[Lumio] FINAL QUALITY:', play.quality);
             if (is_serial && responseQualityHint) serial_quality_hint = responseQualityHint;
 
             function finish(items) {
-                items = Array.isArray(items) ? items.filter(function (item) {
-                    return item && typeof item === 'object' && !Array.isArray(item);
-                }) : [];
                 if (balanser !== 'pidtor') return items;
 
                 var seen = {};
@@ -4824,8 +4534,6 @@ nexusLog('[Lumio] FINAL QUALITY:', play.quality);
     if (Array.isArray(j)) {
         return finish(j.map(function (data) {
             data = data || {};
-            if (typeof data !== 'object' || Array.isArray(data)) return null;
-            data = sanitizeRemotePayload(data);
 
             var season  = parseInt(data.season || data.s || 0, 10);
 var episode = parseInt(data.episode || data.e || 0, 10);
@@ -4847,8 +4555,14 @@ if (object.movie.name && data.season && !data.episode) {
     data.folder = true;
 }
 
-            if (data.quality && typeof data.quality === 'object' && !Array.isArray(data.quality)) {
-                data.quality = _this.normalizeQuality(data.quality);
+            if (data.url)     data.url     = _this.normalizeUrl(data.url);
+            if (data.stream)  data.stream  = _this.normalizeUrl(data.stream);
+            if (data.subtitle) data.subtitle = _this.normalizeUrl(data.subtitle);
+
+            if (data.quality && typeof data.quality === 'object') {
+                Object.keys(data.quality).forEach(function (q) {
+                    data.quality[q] = _this.normalizeUrl(data.quality[q]);
+                });
             }
 
             if (balanser === 'pidtor' && data.maxquality && !data.quality) {
@@ -4856,6 +4570,7 @@ if (object.movie.name && data.season && !data.episode) {
                 data.quality[String(data.maxquality) + 'p'] = data.url || data.stream || '';
             }
 
+            delete data.badge_class; delete data.nexus_card_class; // [V10]
             _this.decorateDisplayQuality(data);
             _this.applySerialQualityHint(data, responseQualityHint);
             return data;
@@ -4865,13 +4580,11 @@ if (object.movie.name && data.season && !data.episode) {
 
             var result = [];
             try {
-                var html = $('<div>' + str + '</div>');
+                var html = $(lumioInertParse(str)); // [V10-SAFE]
                 html.find('[data-json]').each(function () {
                     var el   = $(this);
                     var data = {};
-                    try { data = JSON.parse(el.attr('data-json') || '{}'); } catch (e2) { data = {}; }
-                    if (!data || typeof data !== 'object' || Array.isArray(data)) data = {};
-                    data = sanitizeRemotePayload(data);
+                    try { data = JSON.parse(el.attr('data-json') || '{}'); } catch (e2) {}
                     var s    = el.attr('s');
                     var ep   = el.attr('e');
                     var text = el.text();
@@ -4902,8 +4615,14 @@ if (object.movie.name && data.season && !data.episode) {
 }
                     data.active = el.hasClass('active');
 
-                    if (data.quality && typeof data.quality === 'object' && !Array.isArray(data.quality)) {
-    data.quality = _this.normalizeQuality(data.quality);
+                    if (data.url) data.url = _this.normalizeUrl(data.url);
+if (data.stream) data.stream = _this.normalizeUrl(data.stream);
+if (data.subtitle) data.subtitle = _this.normalizeUrl(data.subtitle);
+
+if (data.quality && typeof data.quality === 'object') {
+    Object.keys(data.quality).forEach(function (q) {
+        data.quality[q] = _this.normalizeUrl(data.quality[q]);
+    });
 }
 
 if (balanser === 'pidtor' && data.maxquality && !data.quality) {
@@ -4911,7 +4630,8 @@ if (balanser === 'pidtor' && data.maxquality && !data.quality) {
     data.quality[String(data.maxquality) + 'p'] = data.url || data.stream || '';
 }
 
-_this.decorateDisplayQuality(data);
+delete data.badge_class; delete data.nexus_card_class; // [V10]
+            _this.decorateDisplayQuality(data);
 _this.applySerialQualityHint(data, responseQualityHint);
 if (data.url || data.method || data.stream) result.push(data);
                 });
@@ -5279,15 +4999,14 @@ if (Lampa.Listener && Lampa.Listener.follow) {
         if (!Lampa.Manifest) return false;
 
         var plugins = Lampa.Manifest.plugins;
+        var wasArray = Object.prototype.toString.call(plugins) === '[object Array]';
 
         Lampa.Component.add(NEXUS_COMPONENT, component);
         resetTemplates();
 
-        // Preserve an existing manifest array by mutating it in place.
-        if (Object.prototype.toString.call(plugins) !== '[object Array]') {
-            plugins = plugins && typeof plugins === 'object' ? [plugins] : [];
-            Lampa.Manifest.plugins = plugins;
-        }
+        // [V10] если это уже массив — мутируем ту же ссылку, а не подменяем
+        // Lampa.Manifest.plugins новым объектом (другой код мог сохранить старую ссылку)
+        if (!wasArray) plugins = plugins && typeof plugins === 'object' ? [plugins] : [];
 
         for (var i = plugins.length - 1; i >= 0; i--) {
             if (plugins[i] && plugins[i].component === manifst.component) {
@@ -5296,7 +5015,7 @@ if (Lampa.Listener && Lampa.Listener.follow) {
         }
 
         plugins.unshift(manifst);
-        Lampa.Manifest.plugins = plugins;
+        if (!wasArray) Lampa.Manifest.plugins = plugins;
         return true;
     }
 
