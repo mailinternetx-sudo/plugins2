@@ -5,7 +5,9 @@
  *  1) Источник каталога V10 (rutor-воркер) — категории, пагинация,
  *     дедупликация, корректное определение типа карточек (movie/tv).
  *  2) TorrServer Switcher — выбор основного/резервного TorrServer из
- *     списка с живой проверкой (🟢/🔴) и авто-failover раз в 5 минут.
+ *     встроенного списка + первых 20 адресов из Telegram-канала
+ *     torrserve_freeip (через эндпоинт /tsservers воркера). В меню
+ *     попадают только рабочие серверы; авто-failover раз в 5 минут.
  *  3) Каталог парсеров (по мотивам LME PubTorr) — выбор Jackett/Prowlarr
  *     парсера из списка с проверкой доступности и записью в штатные
  *     ключи Lampa (jackett_url / jackett_key / parser_torrent_type).
@@ -425,6 +427,14 @@
         var CHECK_TIMEOUT       = 4000;
         var AUTO_CHECK_INTERVAL = 5 * 60000;
 
+        // Адреса из Telegram-канала (читает воркер — у t.me нет CORS).
+        var REMOTE_URL     = WORKER_URL + 'tsservers';
+        var REMOTE_LIMIT   = 20;
+        var REMOTE_TIMEOUT = 9000;
+        var REMOTE_TTL     = 10 * 60000;
+        var STORAGE_REMOTE = 'torrserver_switcher_remote';
+        var CHECK_PARALLEL = 10; // сколько серверов проверяем одновременно
+
         var autoTimer = null;
         var picking   = false;
 
@@ -482,7 +492,13 @@
                         signal: controller ? controller.signal : undefined
                     }).then(function (res) {
                         if (mode === 'no-cors' || res.type === 'opaque') { finish('unknown'); return; }
-                        finish(res.ok || res.status === 200 ? 'ok' : 'down');
+                        if (!(res.ok || res.status === 200)) { finish('down'); return; }
+                        // /echo у TorrServer отдаёт короткий текст с версией. HTML в ответе —
+                        // заглушка провайдера/хостинга, а не TorrServer.
+                        res.text().then(function (txt) {
+                            var t = String(txt || '').replace(/^\s+/, '');
+                            finish(t.charAt(0) === '<' ? 'down' : 'ok');
+                        }, function () { finish('ok'); });
                     })['catch'](function () {
                         if (done) return;
                         if (mode === 'cors') attempt('no-cors');
@@ -500,18 +516,109 @@
             return ms > 0 ? '~' + ms + ' мс' : '';
         }
 
-        function checkAll(onDone) {
-            var results = new Array(SERVERS.length);
-            var left = SERVERS.length;
-            if (!left) { onDone([]); return; }
+        // Проверка списка адресов с ограничением параллельности (ТВ-браузеры
+        // плохо переносят 30 одновременных запросов).
+        function checkAll(list, onDone) {
+            var results = new Array(list.length);
+            var total = list.length;
+            var next = 0, finished = 0;
+            if (!total) { onDone([]); return; }
 
-            SERVERS.forEach(function (addr, idx) {
+            function worker() {
+                if (next >= total) return;
+                var idx = next++;
+                var addr = list[idx];
                 ping(addr, function (res) {
                     results[idx] = { addr: addr, url: normalizeUrl(addr), status: res.status, ok: res.ok, ms: res.ms };
-                    left--;
-                    if (left === 0) onDone(results);
+                    finished++;
+                    if (finished === total) onDone(results);
+                    else worker();
                 });
+            }
+
+            var n = Math.min(CHECK_PARALLEL, total);
+            for (var i = 0; i < n; i++) worker();
+        }
+
+        // Только «ip:порт» — данные пришли из сети, в URL их подставляем после проверки.
+        function validAddr(a) {
+            if (typeof a !== 'string') return false;
+            var m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}):(\d{2,5})$/.exec(a.trim());
+            if (!m) return false;
+            for (var i = 1; i <= 4; i++) if (Number(m[i]) > 255) return false;
+            var port = Number(m[5]);
+            return port >= 1 && port <= 65535;
+        }
+
+        function readRemoteCache() {
+            try {
+                var c = Lampa.Storage.get(STORAGE_REMOTE, '');
+                if (typeof c === 'string' && c) c = JSON.parse(c);
+                if (c && typeof c === 'object' && c.list && c.list.length) return c;
+            } catch (e) {}
+            return null;
+        }
+
+        function cleanList(arr) {
+            var out = [];
+            (arr || []).forEach(function (a) {
+                if (validAddr(a) && out.indexOf(a.trim()) === -1) out.push(a.trim());
             });
+            return out.slice(0, REMOTE_LIMIT);
+        }
+
+        // Список из канала: свежий кэш → запрос к воркеру → устаревший кэш → пусто.
+        function loadRemote(cb) {
+            var cached = readRemoteCache();
+            if (cached && cached.ts && Date.now() - cached.ts < REMOTE_TTL) { cb(cached.list); return; }
+
+            var finished = false;
+            var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+            var timer = setTimeout(function () {
+                if (controller) { try { controller.abort(); } catch (e) {} }
+                fail();
+            }, REMOTE_TIMEOUT);
+
+            function fail() {
+                if (finished) return;
+                finished = true;
+                clearTimeout(timer);
+                cb(cached ? cached.list : []);
+            }
+
+            try {
+                fetch(REMOTE_URL, { cache: 'no-store', signal: controller ? controller.signal : undefined })
+                    .then(function (res) {
+                        if (!res.ok) throw new Error('HTTP ' + res.status);
+                        return res.json();
+                    })
+                    .then(function (data) {
+                        if (finished) return;
+                        var list = cleanList(data && data.servers);
+                        if (!list.length) throw new Error('пустой список');
+                        finished = true;
+                        clearTimeout(timer);
+                        try { Lampa.Storage.set(STORAGE_REMOTE, { ts: Date.now(), list: list }); } catch (e) {}
+                        cb(list);
+                    })['catch'](function (e) {
+                        log('[TS-Switcher] список из Telegram не получен:', e);
+                        fail();
+                    });
+            } catch (e) {
+                fail();
+            }
+        }
+
+        // Итоговый список кандидатов: встроенные + из канала, без дублей.
+        function buildCandidates(remote) {
+            var seen = {}, out = [];
+            SERVERS.concat(remote || []).forEach(function (a) {
+                var k = normalizeUrl(a).toLowerCase();
+                if (!k || seen[k]) return;
+                seen[k] = true;
+                out.push(a);
+            });
+            return out;
         }
 
         function getPrimary() { return Lampa.Storage.get(STORAGE_PRIMARY, ''); }
@@ -539,47 +646,59 @@
         function pickServer(mode) {
             if (picking) return;
             picking = true;
+            // страховка: если что-то зависнет, через минуту разрешаем повторный запуск
+            var guard = setTimeout(function () { picking = false; }, 60000);
 
             var returnTo = captureController();
-            noty('Проверка серверов TorrServer…');
+            noty('Загрузка и проверка серверов TorrServer…');
 
-            checkAll(function (results) {
-                picking = false;
+            loadRemote(function (remote) {
+                var list = buildCandidates(remote);
 
-                var currentUrl = mode === 'primary' ? getPrimary() : getBackup();
+                checkAll(list, function (results) {
+                    clearTimeout(guard);
+                    picking = false;
 
-                // [V10] «ok» (обычный CORS-ответ) → «unknown» (сервер жив, но статус не виден
-                // из-за no-cors) → «down»
-                function rank(st) { return st === 'ok' ? 0 : st === 'unknown' ? 1 : 2; }
+                    var currentUrl = mode === 'primary' ? getPrimary() : getBackup();
 
-                var sorted = results.slice().sort(function (a, b) {
-                    var ra = rank(a.status), rb = rank(b.status);
-                    if (ra !== rb) return ra - rb;
-                    return (a.ms || 9e9) - (b.ms || 9e9);
-                });
+                    // В меню — только рабочие (🟢 ответ подтверждён). Если подтверждённых нет,
+                    // показываем 🟡 (сервер отвечает, но из-за CORS статус не виден).
+                    var shown = results.filter(function (r) { return r.status === 'ok'; });
+                    if (!shown.length) shown = results.filter(function (r) { return r.status === 'unknown'; });
 
-                var items = sorted.map(function (r) {
-                    var dot   = r.status === 'ok' ? '🟢' : r.status === 'unknown' ? '🟡' : '🔴';
-                    var mark  = sameUrl(currentUrl, r.url) ? ' ✓' : '';
-                    var speed = r.ok ? formatMs(r.ms) : '';
-                    var subtitle = r.status === 'ok' ? 'работает' : r.status === 'unknown' ? 'отвечает, статус не проверить (нет CORS)' : 'не отвечает';
-                    return {
-                        title: dot + ' ' + r.addr + (speed ? ' (' + speed + ')' : '') + mark,
-                        subtitle: subtitle,
-                        url: r.url,
-                        ok: r.ok
-                    };
-                });
+                    if (!shown.length) {
+                        noty('Рабочих серверов TorrServer не найдено (проверено: ' + results.length + '). Попробуйте позже.');
+                        restoreController(returnTo);
+                        return;
+                    }
 
-                Lampa.Select.show({
-                    title: mode === 'primary' ? 'TorrServer — основной адрес' : 'TorrServer — резервный адрес',
-                    items: items,
-                    onSelect: function (item) {
-                        if (!item.ok) noty('⚠ Этот сервер сейчас не отвечает. Выбран, но лучше выбрать зелёный.');
-                        if (mode === 'primary') setPrimary(item.url);
-                        else setBackup(item.url);
-                    },
-                    onBack: function () { restoreController(returnTo); }
+                    shown.sort(function (a, b) {
+                        var ra = a.status === 'ok' ? 0 : 1, rb = b.status === 'ok' ? 0 : 1;
+                        if (ra !== rb) return ra - rb;
+                        return (a.ms || 9e9) - (b.ms || 9e9);
+                    });
+
+                    var items = shown.map(function (r) {
+                        var dot   = r.status === 'ok' ? '🟢' : '🟡';
+                        var mark  = sameUrl(currentUrl, r.url) ? ' ✓' : '';
+                        var speed = formatMs(r.ms);
+                        return {
+                            title: dot + ' ' + r.addr + (speed ? ' (' + speed + ')' : '') + mark,
+                            subtitle: r.status === 'ok' ? 'работает' : 'отвечает, статус не проверить (нет CORS)',
+                            url: r.url
+                        };
+                    });
+
+                    Lampa.Select.show({
+                        title: (mode === 'primary' ? 'TorrServer — основной адрес' : 'TorrServer — резервный адрес') +
+                               ' (рабочих: ' + items.length + ' из ' + results.length + ')',
+                        items: items,
+                        onSelect: function (item) {
+                            if (mode === 'primary') setPrimary(item.url);
+                            else setBackup(item.url);
+                        },
+                        onBack: function () { restoreController(returnTo); }
+                    });
                 });
             });
         }
@@ -643,7 +762,7 @@
                     param: { name: COMPONENT + '_recheck', type: 'button', default: '' },
                     field: {
                         name: 'Проверить все сервера сейчас',
-                        description: 'Обновить статус (зелёный/красный) списка адресов'
+                        description: 'Заново загрузить адреса из Telegram-канала и показать только рабочие'
                     },
                     onRender: function (item) {
                         item.on('hover:enter', function () { pickServer('primary'); });
